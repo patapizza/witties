@@ -8,10 +8,14 @@
                  [org.clojure/tools.nrepl "0.2.12"]
                  [aleph "0.4.1"]
                  [cheshire "5.6.1"]
+                 [com.taoensso/timbre "4.3.1"]
                  [compojure "1.4.0"]
                  [http-kit "2.1.19"]
                  [manifold "0.1.4"]
-                 [ring/ring-defaults "0.1.5"]]
+                 [prismatic/plumbing "0.5.3"]
+                 [prismatic/schema "1.1.1"]
+                 [ring/ring-defaults "0.1.5"]
+                 [ring/ring-json "0.4.0"] ]
   :main witties.handler
   :profiles {:dev {:dependencies [[javax.servlet/servlet-api "2.5"]]}
              :uberjar {:aot :all}})
