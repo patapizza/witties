@@ -99,7 +99,7 @@
       wrap-absolute-redirects))
 
 (defn reset-state! []
-  (when-let [{:keys [ctrl-chan http-server event-chan nrepl-server]} @state]
+  (when-let [{:keys [ctrl-chan event-chan http-server nrepl-server]} @state]
     (when http-server (.close http-server))
     (when nrepl-server (nrepl/stop-server nrepl-server))
     (when ctrl-chan
