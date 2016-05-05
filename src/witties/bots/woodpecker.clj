@@ -3,6 +3,7 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.pprint :refer [pprint]]
+            [clojure.string :as string]
             [clj-time.coerce :as c]
             [chime :refer [chime-at]]
             [plumbing.core :refer [map-vals]]
@@ -51,6 +52,23 @@
   (when cancel (cancel))
   (dissoc reminder :cancel))
 
+(defn- remove-reminder!
+  [thread-id reminder]
+  (->> (get-in @threads [thread-id :reminders])
+       (keep (fn [r]
+               (if (= (:reminder r) (:reminder reminder))
+                 (do (stop-reminder! r) nil)
+                 r)))))
+
+(defn pprint-reminders
+  [thread-id]
+  (if-let [reminders (seq (get-in @threads [thread-id :reminders]))]
+    (->> reminders
+         (map (fn [{:keys [at reminder messages]}]
+                (format "%s %s" reminder (c/from-long at))))
+         (string/join ", "))
+    "none"))
+
 ;; -----------------------------------------------------------------------------
 ;; Wit actions
 
@@ -62,16 +80,29 @@
 (defn merge!>
   [params thread-id context entities msg]
   (go (let [dt (get-in entities [:datetime 0 :value])
-            reminder (get-in entities [:reminder 0 :value])]
-        (cond-> context
-          reminder (assoc :reminder reminder)
-          dt (assoc :time-ms (c/to-long dt)
-                    :time (str "on " dt))))))
+            reminder (get-in entities [:reminder 0 :value])
+            intent (get-in entities [:intent 0 :value])]
+        (cond
+          (= "show_reminders" intent) {:reminders (pprint-reminders thread-id)}
+          :else
+          (cond-> context
+            (:ok-reminder context) ((fn [_] {}))
+            reminder (assoc :reminder reminder)
+            dt (assoc :time-ms (c/to-long dt)
+                      :time (str "on " dt)))))))
 
 (defn error!>
   [{:keys [fb-page-token]} thread-id context msg]
   (go (warnf "Sending error user=%s msg=%s" thread-id msg)
       (<! (req/fb-message!> fb-page-token thread-id msg))))
+
+(defn cancel-reminder!>
+  [params thread-id {:keys [reminder] :as context}]
+  (go (let [n (count (get-in @threads [thread-id :reminders]))
+            reminders (remove-reminder! thread-id reminder)]
+        (cond-> context
+          (= (dec n) (count reminders)) (do (swap! threads assoc-in [thread-id :reminders] reminders)
+                                            (assoc :ok-cancel true :reminders n))))))
 
 (defn set-reminder!>
   [{:keys [fb-page-token]} thread-id {:keys [reminder time-ms] :as context}]

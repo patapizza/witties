@@ -86,7 +86,7 @@
   (if-let [session (get-in @bots [bot :threads thread-id 0])]
     session
     (let [new-session {:session-id (str (UUID/randomUUID))}]
-      (swap! bots update-in [bot :threads thread-id] conj new-session)
+      (swap! bots update-in [bot :threads thread-id] (comp vec conj) new-session)
       new-session)))
 
 (defn stop-bots!>
@@ -129,5 +129,5 @@
                             bot sender session-id text (pr-str context))
                     (some->> (run-actions!> bot params sender session-id text context)
                       <! ;; TODO don't block here
-                      (swap! bots update-in [bot :threads sender 0 :context]))))
+                      (swap! bots assoc-in [bot :threads sender 0 :context]))))
           (recur))))))
