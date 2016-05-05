@@ -7,7 +7,7 @@
             [chime :refer [chime-at]]
             [plumbing.core :refer [map-vals]]
             [schema.core :as s]
-            [taoensso.timbre :refer [infof warnf]]
+            [taoensso.timbre :refer [debugf infof warn warnf]]
             [witties.request :as req]))
 
 (def threads
@@ -32,19 +32,23 @@
 
 (defn- schedule-reminder!
   [fb-page-token thread-id {:keys [at message] :as reminder}]
+  (infof "scheduling user=%s reminder=%s" thread-id (pr-str reminder))
   (let [on-finished (fn []
                       (swap! threads update-in [thread-id :reminders]
                              (partial remove #(= reminder (dissoc % :cancel)))))
         f (chime-at [at]
                     (fn [time-ms]
                       ;; TODO reliability
+                      (infof "fired user=%s message=%s" thread-id message)
                       (req/fb-message!> fb-page-token thread-id message))
-                    {:on-finished on-finished})]
+                    {:on-finished on-finished
+                     :error-handler (fn [e] (warn e "an error occurred"))})]
     (assoc reminder :cancel f)))
 
 (defn- stop-reminder!
   [{:keys [cancel] :as reminder}]
-  (cancel)
+  (infof "stopping reminder=%s" (pr-str reminder))
+  (when cancel (cancel))
   (dissoc reminder :cancel))
 
 ;; -----------------------------------------------------------------------------
@@ -70,17 +74,17 @@
       (<! (req/fb-message!> fb-page-token thread-id msg))))
 
 (defn set-reminder!>
-  [{:keys [fb-page-token]} thread-id {:keys [reminder time-ms]}]
+  [{:keys [fb-page-token]} thread-id {:keys [reminder time-ms] :as context}]
   (go (let [message (format "Here's your reminder to %s!" reminder)
             reminder {:reminder reminder
                       :at time-ms
                       :message message}]
         (if-let [err (reminder-checker reminder)]
-          (warnf "malformed reminder reminder=%s err=%s" reminder err)
+          (do (warnf "malformed reminder reminder=%s err=%s" reminder err)
+              context)
           (let [reminder (schedule-reminder! fb-page-token thread-id reminder)]
-            (infof "scheduled user=%s at=%s message=%s"
-                   thread-id time-ms message)
-            (swap! threads update-in [thread-id :reminders] conj reminder))))))
+            (swap! threads update-in [thread-id :reminders] conj reminder)
+            (assoc context :ok-reminder true))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Core interface
@@ -89,17 +93,19 @@
   "Restarts saved reminders, if any."
   [{:keys [fb-page-token]}]
   (when-let [config (some-> config-file io/resource slurp edn/read-string)]
+    (debugf "init with config=%s" (pr-str config))
     (->> config
-         (map (fn [[thread-id {:keys [reminders] :as data}]]
-                (mapv (partial schedule-reminder! fb-page-token thread-id) reminders)))
+         (map (fn [[thread-id data]]
+                [thread-id (update data :reminders (partial mapv (partial schedule-reminder! fb-page-token thread-id)))]))
          (into {})
          (reset! threads))))
 
 (defn stop!>
   "Saves reminders, if any."
   []
-  (go (with-open [writer (io/writer config-file)]
-        (let [content (map-vals (fn [{:keys [reminders] :as data}]
-                                  (mapv stop-reminder! reminders))
-                                @threads)]
-          (pprint content writer)))))
+  (go (when-let [file (io/resource config-file)]
+        (with-open [writer (io/writer file)]
+          (let [content (map-vals #(update % :reminders (partial mapv stop-reminder!))
+                                  @threads)]
+            (debugf "Saving file=%s content=%s" config-file (pr-str content))
+            (pprint content writer))))))

@@ -94,8 +94,9 @@
   ([bots] (stop-bots!> bots 1000))
   ([bots allowed-ms]
    (let [bot->chan (->> bots
-                        (map-from-keys #(->bot-fn % "stop!>"))
+                        (map-from-keys #(when-let [f (->bot-fn % "stop!>")] (f)))
                         (remove (fn [[_ v]] (nil? v)))
+                        (into {})
                         (merge {:timeout (timeout allowed-ms)}))]
      (go-loop [chans (vals bot->chan)]
        (let [[_ c] (alts! chans)]
@@ -104,7 +105,12 @@
 
 (defn init!
   [in ctrl]
-  (reset! bots (some-> config-file io/resource slurp edn/read-string))
+  (when-let [config (some-> config-file io/resource slurp edn/read-string)]
+    (pmap (fn [[bot params]]
+            (when-let [f (->bot-fn bot "init!")]
+              (f params)))
+          config)
+    (reset! bots config))
   (go-loop []
     (let [[v c] (alts! [in ctrl])]
       (if (= c ctrl)
@@ -120,8 +126,8 @@
             (not bot) (warnf "couldn't find bot for recipient=%s" recipient)
             :else (let [{:keys [session-id context]} (get-or-create-session! bot sender)]
                     (debugf "Running actions for bot=%s thread-id=%s session-id=%s text=%s context=%s"
-                            bot recipient session-id text (pr-str context))
-                    (some->> (run-actions!> bot params recipient session-id text context)
+                            bot sender session-id text (pr-str context))
+                    (some->> (run-actions!> bot params sender session-id text context)
                       <! ;; TODO don't block here
-                      (swap! bots update-in [bot :threads recipient 0 :context]))))
+                      (swap! bots update-in [bot :threads sender 0 :context]))))
           (recur))))))

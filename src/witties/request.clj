@@ -50,7 +50,7 @@
 ;; -----------------------------------------------------------------------------
 ;; Messenger
 
-(def fb-url "https://graph.facebook.com/me/messages")
+(def fb-url "https://graph.facebook.com/v2.6/me/messages")
 
 (defn fb!>
   [access-token meth opts]
