@@ -5,6 +5,7 @@
             [clojure.pprint :refer [pprint]]
             [clojure.string :as string]
             [clj-time.coerce :as c]
+            [clj-time.core :as t]
             [chime :refer [chime-at]]
             [plumbing.core :refer [map-vals]]
             [schema.core :as s]
@@ -53,19 +54,44 @@
   (dissoc reminder :cancel))
 
 (defn- remove-reminder!
-  [thread-id reminder]
-  (->> (get-in @threads [thread-id :reminders])
-       (keep (fn [r]
-               (if (= (:reminder r) (:reminder reminder))
-                 (do (stop-reminder! r) nil)
-                 r)))))
+  [thread-id about]
+  (let [f (fn [r]
+            (if (= about (:reminder r))
+              (do (stop-reminder! r) nil)
+              r))]
+    (swap! threads update-in [thread-id :reminders] (comp vec (partial keep f)))))
 
-(defn pprint-reminders
+(def days-of-week
+  ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
+
+(defn to-pst
+  [dt-or-time-ms]
+  (cond-> dt-or-time-ms
+    (integer? dt-or-time-ms) c/from-long
+    true (t/to-time-zone (t/time-zone-for-id "America/Los_Angeles"))))
+
+(defn pretty-time
+  [time-ms]
+  {:pre [(number? time-ms)]}
+  (let [now (to-pst (t/now))
+        in-one-week (t/plus now (t/weeks 1))
+        dt (to-pst time-ms)
+        [month day hour min] ((juxt t/month t/day t/hour t/minute) dt)]
+    (str "on "
+         (if (t/before? dt in-one-week)
+           (->> dt t/day-of-week dec (get days-of-week))
+           (format "%s/%s" month day))
+         " at " (format "%s:%s"
+                        (if (= 0 hour) 12 (mod hour 12))
+                        (cond->> min (> 10 min) (str "0")))
+         (if (> 12 hour) "am" "pm"))))
+
+(defn pretty-reminders
   [thread-id]
   (if-let [reminders (seq (get-in @threads [thread-id :reminders]))]
     (->> reminders
-         (map (fn [{:keys [at reminder messages]}]
-                (format "%s %s" reminder (c/from-long at))))
+         (map (fn [{:keys [at reminder]}]
+                (format "%s %s" reminder (pretty-time at))))
          (string/join ", "))
     "none"))
 
@@ -79,17 +105,13 @@
 
 (defn merge!>
   [params thread-id context entities msg]
-  (go (let [dt (get-in entities [:datetime 0 :value])
+  (go (let [time-ms (some-> (get-in entities [:datetime 0 :value]) c/to-long)
             reminder (get-in entities [:reminder 0 :value])
             intent (get-in entities [:intent 0 :value])]
-        (cond
-          (= "show_reminders" intent) {:reminders (pprint-reminders thread-id)}
-          :else
-          (cond-> context
-            (:ok-reminder context) ((fn [_] {}))
-            reminder (assoc :reminder reminder)
-            dt (assoc :time-ms (c/to-long dt)
-                      :time (str "on " dt)))))))
+        (cond-> context
+          (= "show_reminders" intent) (assoc :reminders (pretty-reminders thread-id))
+          reminder (assoc :reminder reminder)
+          time-ms (assoc :time-ms time-ms :time (pretty-time time-ms))))))
 
 (defn error!>
   [{:keys [fb-page-token]} thread-id context msg]
@@ -98,11 +120,15 @@
 
 (defn cancel-reminder!>
   [params thread-id {:keys [reminder] :as context}]
-  (go (let [n (count (get-in @threads [thread-id :reminders]))
-            reminders (remove-reminder! thread-id reminder)]
+  (go (let [exp (-> (get-in @threads [thread-id :reminders]) count dec)
+            reminders (-> (remove-reminder! thread-id reminder)
+                          (get-in [thread-id :reminders]))]
         (cond-> context
-          (= (dec n) (count reminders)) (do (swap! threads assoc-in [thread-id :reminders] reminders)
-                                            (assoc :ok-cancel true :reminders n))))))
+          (= exp (count reminders)) (assoc :ok-cancel true :reminders exp)))))
+
+(defn clear-context!>
+  [params thread-id context]
+  (go {}))
 
 (defn set-reminder!>
   [{:keys [fb-page-token]} thread-id {:keys [reminder time-ms] :as context}]
