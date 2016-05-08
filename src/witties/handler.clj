@@ -30,10 +30,10 @@
   [handler args & body]
   `(defn ~handler
      ~args
-     (let [req# ~(first args)
-           body# (do ~@body)]
-       (log (or (:as req#) req#) body#)
-       (go body#))))
+     (go (let [req# ~(first args)
+               body# (do ~@body)]
+           (log (or (:as req#) req#) body#)
+           body#))))
 
 (defhandler index
   [request]
