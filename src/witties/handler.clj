@@ -22,45 +22,55 @@
   (let [meth (-> request-method name string/upper-case)]
     (infof "%s %s%s body=%s -> %s body=%s" meth uri
            (if query-string (str "?" query-string) "") (pr-str body)
-           (:status resp) (:body resp)))
-  resp)
+           (:status resp) (:body resp))
+    resp))
 
-(defn index-handler>
+(defmacro defhandler
+  "Requires an :as directive when destructuring request."
+  [handler args & body]
+  `(defn ~handler
+     ~args
+     (let [req# ~(first args)
+           body# (do ~@body)]
+       (log (or (:as req#) req#) body#)
+       (go body#))))
+
+(defhandler index
   [request]
-  (go (log request {:body "hey" :status 200})))
+  {:body "hey" :status 200})
 
-(defn fb-get-handler>
+(defhandler fb-get
   [{:keys [params] {:keys [fb-verify-token]} :state :as request}]
   ;; TODO save origin and check in fb-post-handler
-  (go (if (and (= (get params "hub.mode") "subscribe")
-               (= (get params "hub.verify_token") fb-verify-token)
-               (get params "hub.challenge"))
-        (log request {:status 200
-                      :body (get params "hub.challenge")})
-        (log request {:status 400}))))
+  (if (and (= (get params "hub.mode") "subscribe")
+           (= (get params "hub.verify_token") fb-verify-token)
+           (get params "hub.challenge"))
+    {:status 200
+     :body (get params "hub.challenge")}
+    {:status 400}))
 
-(defn fb-post-handler!>
+(defhandler fb-post
   [{:keys [body] {:keys [event-chan]} :state :as request}]
-  (go (when (= "page" (:object body))
-        (let [events (->> (:entry body)
-                          (mapcat (fn [{:keys [messaging]}]
-                                    (keep (fn [{:keys [message recipient sender timestamp]}]
-                                            ;; Ignoring everything but text messages
-                                            (when-let [text (:text message)]
-                                              {:recipient (:id recipient)
-                                               :sender (:id sender)
-                                               :text text
-                                               :timestamp timestamp}))
-                                          messaging)))
-                          (sort-by :timestamp))]
-          (doseq [event events]
-            (debugf "Sending event=%s" (pr-str (dissoc event :timestamp)))
-            (>! event-chan (dissoc event :timestamp)))))
-      (log request {:status 200})))
+  (when (= "page" (:object body))
+    (let [events (->> (:entry body)
+                      (mapcat (fn [{:keys [messaging]}]
+                                (keep (fn [{:keys [message recipient sender timestamp]}]
+                                        ;; Ignoring everything but text messages
+                                        (when-let [text (:text message)]
+                                          {:recipient (:id recipient)
+                                           :sender (:id sender)
+                                           :text text
+                                           :timestamp timestamp}))
+                                      messaging)))
+                      (sort-by :timestamp))]
+      (doseq [event events]
+        (debugf "Sending event=%s" (pr-str (dissoc event :timestamp)))
+        (put! event-chan (dissoc event :timestamp)))))
+  {:status 200})
 
-(defn default-handler>
+(defhandler default
   [request]
-  (go (log request {:body "Not Found" :status 404})))
+  {:body "Not Found" :status 404})
 
 ;; Compojure would normally deref chans
 ;; see https://github.com/weavejester/compojure/blob/1.5.0/src/compojure/response.clj#L21
@@ -69,10 +79,10 @@
   (render [c _] c))
 
 (defroutes app-routes
-  (GET "/" [] index-handler>)
-  (GET "/fb" [] fb-get-handler>)
-  (POST "/fb" [] fb-post-handler!>)
-  (rfn [] default-handler>))
+  (GET "/" [] index)
+  (GET "/fb" [] fb-get)
+  (POST "/fb" [] fb-post)
+  (rfn [] default))
 
 (defn wrap-deferred
   "Converts a chan to a manifold.deferred"
@@ -111,11 +121,10 @@
 
 (defn -main
   [& args]
-  ;; TODO protect connections on nrepl-port
   (reset-state!)
-  (let [http-port (or (System/getenv "HTTP_PORT") 8080)
-        nrepl-port (or (System/getenv "NREPL_PORT") 8090)
-        fb-verify-token (or (System/getenv "FB_VERIFY_TOKEN"))
+  (let [http-port (or (some-> (System/getenv "HTTP_PORT") (Integer.)) 8080)
+        nrepl-port (or (some-> (System/getenv "NREPL_PORT") (Integer.)) 8090)
+        fb-verify-token (System/getenv "FB_VERIFY_TOKEN")
         event-chan (chan)
         ctrl-chan (chan)
         core-chan (core/init! event-chan ctrl-chan)
