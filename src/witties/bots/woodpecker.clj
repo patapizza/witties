@@ -26,7 +26,8 @@
   {:reminder s/Str
    :message s/Str
    :at s/Int
-   (s/optional-key :cancel) (s/pred fn?)})
+   (s/optional-key :cancel) (s/pred fn?)
+   (s/optional-key :fired) s/Bool})
 (def reminder-checker (s/checker Reminder))
 
 ;; -----------------------------------------------------------------------------
@@ -34,18 +35,23 @@
 
 (defn- schedule-reminder!
   [fb-page-token thread-id {:keys [at message] :as reminder}]
-  (infof "scheduling user=%s reminder=%s" thread-id (pr-str reminder))
-  (let [on-finished (fn []
-                      (swap! threads update-in [thread-id :reminders]
-                             (partial remove #(= reminder (dissoc % :cancel)))))
-        f (chime-at [at]
-                    (fn [time-ms]
-                      ;; TODO reliability
-                      (infof "fired user=%s message=%s" thread-id message)
-                      (req/fb-message!> fb-page-token thread-id message))
-                    {:on-finished on-finished
-                     :error-handler (fn [e] (warn e "an error occurred"))})]
-    (assoc reminder :cancel f)))
+  (if (t/before? (c/from-long at) (t/now))
+    (warnf "trying to schedule reminder in the past: %s" (pr-str reminder))
+    (do
+      (infof "scheduling user=%s reminder=%s" thread-id (pr-str reminder))
+      (let [g (fn [r]
+                (cond-> r
+                  (= message (:message r)) (-> (dissoc :cancel)
+                                               (assoc :fired true))))
+            f (chime-at [at]
+                        (fn [time-ms]
+                          ;; TODO reliability
+                          (infof "fired user=%s message=%s" thread-id message)
+                          (req/fb-message!> fb-page-token thread-id message)
+                          (swap! threads update-in [thread-id :reminders]
+                                 (partial mapv g)))
+                        {:error-handler (fn [e] (warn e "an error occurred"))})]
+        (assoc reminder :cancel f)))))
 
 (defn- stop-reminder!
   [{:keys [cancel] :as reminder}]
@@ -54,12 +60,23 @@
   (dissoc reminder :cancel))
 
 (defn- remove-reminder!
+  "Returns the number of reminders left when successful"
   [thread-id about]
-  (let [f (fn [r]
+  (let [exp (-> (get-in @threads [thread-id :reminders]) count dec)
+        f (fn [r]
             (if (= about (:reminder r))
               (do (stop-reminder! r) nil)
-              r))]
-    (swap! threads update-in [thread-id :reminders] (comp vec (partial keep f)))))
+              r))
+        res (-> (swap! threads update-in [thread-id :reminders] (comp vec (partial keep f)))
+                (get-in [thread-id :reminders]))]
+    (when (= exp (count res))
+      exp)))
+
+(defn- reschedule-reminder!
+  ":at is the new time"
+  [fb-page-token thread-id {:keys [at message reminder] :as r}]
+  (when (remove-reminder! thread-id reminder)
+    (schedule-reminder! fb-page-token thread-id (dissoc r :fired))))
 
 (def days-of-week
   ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
@@ -88,7 +105,9 @@
 
 (defn pretty-reminders
   [thread-id]
-  (if-let [reminders (seq (get-in @threads [thread-id :reminders]))]
+  (if-let [reminders (->> (get-in @threads [thread-id :reminders])
+                          (remove :fired)
+                          seq)]
     (->> reminders
          (map (fn [{:keys [at reminder]}]
                 (format "%s %s" reminder (pretty-time at))))
@@ -108,10 +127,12 @@
   (go (let [time-ms (some-> (get-in entities [:datetime 0 :value]) c/to-long)
             reminder (get-in entities [:reminder 0 :value])
             intent (get-in entities [:intent 0 :value])]
-        (cond-> context
-          (= "show_reminders" intent) (assoc :reminders (pretty-reminders thread-id))
-          reminder (assoc :reminder reminder)
-          time-ms (assoc :time-ms time-ms :time (pretty-time time-ms))))))
+        (cond
+          (= "show_reminders" intent) (assoc context :reminders (pretty-reminders thread-id))
+          (= "snooze_reminder" intent) (assoc context :snooze true)
+          :else (cond-> context
+                  reminder (assoc :reminder reminder)
+                  time-ms (assoc :time-ms time-ms :time (pretty-time time-ms)))))))
 
 (defn error!>
   [{:keys [fb-page-token]} thread-id context msg]
@@ -120,11 +141,9 @@
 
 (defn cancel-reminder!>
   [params thread-id {:keys [reminder] :as context}]
-  (go (let [exp (-> (get-in @threads [thread-id :reminders]) count dec)
-            reminders (-> (remove-reminder! thread-id reminder)
-                          (get-in [thread-id :reminders]))]
+  (go (let [n (remove-reminder! thread-id reminder)]
         (cond-> context
-          (= exp (count reminders)) (assoc :ok-cancel true :reminders exp)))))
+          n (assoc :ok-cancel true :reminders n)))))
 
 (defn clear-context!>
   [params thread-id context]
@@ -139,21 +158,43 @@
         (if-let [err (reminder-checker reminder)]
           (do (warnf "malformed reminder reminder=%s err=%s" reminder err)
               context)
-          (let [reminder (schedule-reminder! fb-page-token thread-id reminder)]
-            (swap! threads update-in [thread-id :reminders] conj reminder)
-            (assoc context :ok-reminder true))))))
+          (if-let [reminder (schedule-reminder! fb-page-token thread-id reminder)]
+            (do (swap! threads update-in [thread-id :reminders] conj reminder)
+                (assoc context :ok-reminder true))
+            context)))))
+
+(defn snooze-reminder!>
+  [{:keys [fb-page-token] :as params} thread-id context]
+  (go (if-let [reminder (->> (get-in @threads [thread-id :reminders])
+                             (filter :fired)
+                             first)]
+        (let [next-at (+ (* 1000 60 10) (:at reminder))
+              scheduled (->> (assoc reminder :at next-at)
+                             (reschedule-reminder! fb-page-token thread-id))]
+          (if scheduled
+            (do (swap! threads update-in [thread-id :reminders] conj scheduled)
+                (assoc context
+                       :ok-reminder true
+                       :reminder (:reminder reminder)
+                       :time (pretty-time next-at)))
+            (do (warnf "couldn't reschedule reminder %s at %s"
+                       (pr-str reminder) next-at)
+                context)))
+        (do (warnf "couldn't find reminder to snooze")
+            context))))
 
 ;; -----------------------------------------------------------------------------
 ;; Core interface
 
 (defn init!
-  "Restarts saved reminders, if any."
+  "Restarts saved reminders, if any.
+   Doesn't restore active reminders."
   [{:keys [fb-page-token]}]
   (when-let [config (some-> config-file io/resource slurp edn/read-string)]
     (debugf "init with config=%s" (pr-str config))
     (->> config
          (map (fn [[thread-id data]]
-                [thread-id (update data :reminders (partial mapv (partial schedule-reminder! fb-page-token thread-id)))]))
+                [thread-id (update data :reminders (comp vec (partial keep (partial schedule-reminder! fb-page-token thread-id))))]))
          (into {})
          (reset! threads))))
 
