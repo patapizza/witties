@@ -15,16 +15,16 @@
    Shape:
    {:bot {:wit-token \"\"
           :fb-page-token \"\"
-          :fb-page-id 42
-          :threads {42 [{:session-id \"\"
-                         :context {}}]}}}"
+          :fb-page-id \"42\"
+          :threads {\"42\" [{:session-id \"\"
+                             :context {}}]}}}"
   (atom nil))
 
 (def config-file "bots.clj")
 (def max-steps 10)
 (def Event
-  {:sender s/Int
-   :recipient s/Int
+  {:sender s/Str
+   :recipient s/Str
    :text s/Str})
 (def event-checker (s/checker Event))
 

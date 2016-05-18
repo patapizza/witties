@@ -99,7 +99,7 @@
            (->> dt t/day-of-week dec (get days-of-week))
            (format "%s/%s" month day))
          " at " (format "%s:%s"
-                        (if (= 0 hour) 12 (mod hour 12))
+                        (if (or (= 0 hour) (= 12 hour)) 12 (mod hour 12))
                         (cond->> min (> 10 min) (str "0")))
          (if (> 12 hour) "am" "pm"))))
 
