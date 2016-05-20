@@ -1,4 +1,5 @@
 (ns witties.handler
+  (:gen-class :main true)
   (:require [clojure.core.async :refer [<!! >! chan close! go put!]]
             [clojure.string :as string]
             [clojure.tools.nrepl.server :as nrepl]
@@ -135,4 +136,5 @@
                 :event-chan event-chan
                 :ctrl-chan ctrl-chan
                 :core-chan core-chan}]
-    (reset! state state')))
+    (reset! state state')
+    (infof "Up and running.")))

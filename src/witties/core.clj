@@ -2,6 +2,7 @@
   (:require [clojure.core.async :refer [<! alts! go go-loop timeout]]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as string]
             [plumbing.core :refer [map-from-keys]]
             [schema.core :as s]
             [taoensso.timbre :refer [debugf infof warnf]]
@@ -106,6 +107,9 @@
 (defn init!
   [in ctrl]
   (when-let [config (some-> config-file io/resource slurp edn/read-string)]
+    (infof "Loading bots: %s" (->> (keys config)
+                                   (map (comp string/capitalize name))
+                                   (string/join ", ")))
     (pmap (fn [[bot params]]
             (when-let [f (->bot-fn bot "init!")]
               (f params)))
