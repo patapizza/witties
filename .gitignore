@@ -2,11 +2,10 @@
 /lib
 /classes
 /checkouts
-/resources
+/dev-resources
 pom.xml
 pom.xml.asc
 *.jar
 *.class
 /.lein-*
 /.nrepl-port
-vars.env

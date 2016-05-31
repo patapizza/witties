@@ -1,7 +1,5 @@
 (ns witties.bots.woodpecker
   (:require [clojure.core.async :refer [<! go]]
-            [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [clojure.pprint :refer [pprint]]
             [clojure.string :as string]
             [clj-time.coerce :as c]
@@ -9,16 +7,16 @@
             [chime :refer [chime-at]]
             [plumbing.core :refer [map-vals]]
             [schema.core :as s]
-            [taoensso.timbre :refer [debugf infof warn warnf]]
+            [taoensso.timbre :refer [debugf infof warnf]]
+            [witties.db :as db]
             [witties.request :as req]))
 
 (def threads
   "Example:
-   {42 {:reminders [{:about \"buy flowers\"
-                     :message \"Hey Julien, here's your reminder to buy flowers!\"
-                     :at time-ms
-                     :cancel f}]
-        :contact \"Julien\"}}"
+   {\"42\" [{:about \"buy flowers\"
+             :message \"Hey Julien, here's your reminder to buy flowers!\"
+             :at time-ms
+             :cancel f}]}"
   (atom nil))
 
 (def config-file "woodpecker.clj")
@@ -48,9 +46,8 @@
                           ;; TODO reliability
                           (infof "fired user=%s message=%s" thread-id message)
                           (req/fb-message!> fb-page-token thread-id message)
-                          (swap! threads update-in [thread-id :reminders]
-                                 (partial mapv g)))
-                        {:error-handler (fn [e] (warn e "an error occurred"))})]
+                          (swap! threads update thread-id (partial map g)))
+                        {:error-handler #(warnf % "an error occurred")})]
         (assoc reminder :cancel f)))))
 
 (defn- stop-reminder!
@@ -62,13 +59,13 @@
 (defn- remove-reminder!
   "Returns the number of scheduled reminders left when successful"
   [thread-id about]
-  (let [exp (-> (get-in @threads [thread-id :reminders]) count dec)
+  (let [exp (-> (get @threads thread-id) count dec)
         f (fn [r]
             (if (= about (:about r))
               (do (stop-reminder! r) nil)
               r))
-        res (-> (swap! threads update-in [thread-id :reminders] (comp vec (partial keep f)))
-                (get-in [thread-id :reminders]))]
+        res (-> (swap! threads update thread-id (partial keep f))
+                (get thread-id))]
     (when (= exp (count res))
       (count (remove :fired res)))))
 
@@ -105,7 +102,7 @@
 
 (defn pretty-reminders
   [thread-id]
-  (if-let [reminders (->> (get-in @threads [thread-id :reminders])
+  (if-let [reminders (->> (get @threads thread-id)
                           (remove :fired)
                           seq)]
     (->> reminders
@@ -133,7 +130,8 @@
           (= "snooze_reminder" intent) (assoc context :snooze true)
           :else (cond-> context
                   about (assoc :about about)
-                  time-ms (assoc :time-ms time-ms :time (pretty-time time-ms)))))))
+                  time-ms (assoc :time-ms time-ms
+                                 :time (pretty-time time-ms)))))))
 
 (defn error!>
   [{:keys [fb-page-token]} thread-id context msg]
@@ -158,20 +156,20 @@
           (do (warnf "malformed reminder reminder=%s err=%s" reminder err)
               context)
           (if-let [reminder (schedule-reminder! fb-page-token thread-id reminder)]
-            (do (swap! threads update-in [thread-id :reminders] conj reminder)
+            (do (swap! threads update thread-id conj reminder)
                 (assoc context :ok-reminder true))
             context)))))
 
 (defn snooze-reminder!>
   [{:keys [fb-page-token] :as params} thread-id context]
-  (go (if-let [reminder (->> (get-in @threads [thread-id :reminders])
+  (go (if-let [reminder (->> (get @threads thread-id)
                              (filter :fired)
                              first)]
         (let [next-at (+ (* 1000 60 10) (:at reminder))
               scheduled (->> (assoc reminder :at next-at)
                              (reschedule-reminder! fb-page-token thread-id))]
           (if scheduled
-            (do (swap! threads update-in [thread-id :reminders] conj scheduled)
+            (do (swap! threads update thread-id conj scheduled)
                 (assoc context
                        :ok-reminder true
                        :about (:about reminder)
@@ -185,24 +183,30 @@
 ;; -----------------------------------------------------------------------------
 ;; Core interface
 
+(def db-ref (atom nil))
+
 (defn init!
   "Restarts saved reminders, if any.
    Doesn't restore active reminders."
-  [{:keys [fb-page-token]}]
-  (when-let [config (some-> config-file io/resource slurp edn/read-string)]
-    (debugf "init with config=%s" (pr-str config))
-    (->> config
-         (map (fn [[thread-id data]]
-                [thread-id (update data :reminders (comp vec (partial keep (partial schedule-reminder! fb-page-token thread-id))))]))
-         (into {})
+  [{:keys [db-url fb-page-token]}]
+  (when db-url
+    (reset! db-ref db-url)
+    (->> (db/q db-url "select * from woodpecker")
+         (keep (fn [{:keys [thread-id] :as r}]
+                 (schedule-reminder! fb-page-token thread-id r)))
+         (group-by :thread-id)
+         (map-vals (partial map #(dissoc % :thread-id)))
          (reset! threads))))
 
 (defn stop!>
   "Saves reminders, if any."
   []
-  (go (when-let [file (io/resource config-file)]
-        (with-open [writer (io/writer file)]
-          (let [content (map-vals #(update % :reminders (partial mapv stop-reminder!))
-                                  @threads)]
-            (debugf "Saving file=%s content=%s" config-file (pr-str content))
-            (pprint content writer))))))
+  (go (when-let [db-url @db-ref]
+        (db/exec! db-url "truncate table woodpecker")
+        (->> @threads
+             (mapcat (fn [[thread-id reminders]]
+                       (->> reminders
+                            (remove :fired)
+                            (map (comp #(assoc % :thread-id thread-id)
+                                       stop-reminder!)))))
+             (db/insert-rows! db-url :woodpecker)))))

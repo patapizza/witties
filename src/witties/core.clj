@@ -3,11 +3,14 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as string]
+            [clj-time.coerce :as c]
+            [clj-time.core :as t]
             [plumbing.core :refer [map-from-keys]]
             [schema.core :as s]
             [taoensso.timbre :refer [debugf infof warnf]]
             [witties.bots.quickstart]
             [witties.bots.woodpecker]
+            [witties.db :as db]
             [witties.request :as req])
   (:import [java.util UUID]))
 
@@ -18,10 +21,10 @@
           :fb-page-token \"\"
           :fb-page-id \"42\"
           :threads {\"42\" [{:session-id \"\"
+                             :started-at 241423535
                              :context {}}]}}}"
   (atom nil))
 
-(def config-file "bots.clj")
 (def max-steps 10)
 (def Event
   {:sender s/Str
@@ -86,13 +89,14 @@
   [bot thread-id]
   (if-let [session (get-in @bots [bot :threads thread-id 0])]
     session
-    (let [new-session {:session-id (str (UUID/randomUUID))}]
+    (let [new-session {:session-id (str (UUID/randomUUID))
+                       :started-at (-> (t/now) c/to-long)}]
       (swap! bots update-in [bot :threads thread-id] (comp vec conj) new-session)
       new-session)))
 
 (defn stop-bots!>
   "Gives each bot allowed-ms time to gracefully stop."
-  ([bots] (stop-bots!> bots 1000))
+  ([bots] (stop-bots!> bots 25000))
   ([bots allowed-ms]
    (let [bot->chan (->> bots
                         (map-from-keys #(when-let [f (->bot-fn % "stop!>")] (f)))
@@ -100,25 +104,49 @@
                         (into {})
                         (merge {:timeout (timeout allowed-ms)}))]
      (go-loop [chans (vals bot->chan)]
-       (let [[_ c] (alts! chans)]
-         (when-not (= c (bot->chan :timeout))
-           (recur (remove (partial = c) chans))))))))
+       (when (< 1 (count chans))
+         (let [[_ c] (alts! chans)]
+           (when-not (= c (bot->chan :timeout))
+             (recur (remove (partial = c) chans)))))))))
+
+(defn stop!>
+  "Saves sessions in db and gives bots a chance to do it too."
+  [db-url]
+  (go (when db-url
+        (db/exec! db-url "truncate table sessions")
+        (->> @bots
+             (mapcat (fn [[bot {:keys [threads]}]]
+                       (mapcat (fn [[thread-id sessions]]
+                                 (map #(assoc % :bot bot :thread-id thread-id)
+                                      sessions))
+                               threads)))
+             (db/insert-rows! db-url :sessions)))
+      (<! (stop-bots!> (keys @bots)))))
 
 (defn init!
-  [in ctrl]
-  (when-let [config (some-> config-file io/resource slurp edn/read-string)]
-    (infof "Loading bots: %s" (->> (keys config)
-                                   (map (comp string/capitalize name))
-                                   (string/join ", ")))
-    (pmap (fn [[bot params]]
-            (when-let [f (->bot-fn bot "init!")]
-              (f params)))
-          config)
-    (reset! bots config))
+  [db-url in ctrl]
+  (when db-url
+    (db/setup! db-url)
+    (when-let [res (seq (db/q db-url "select * from bots"))]
+      (infof "Loading bots: %s" (->> res
+                                     (mapv (comp string/capitalize :bot))
+                                     (string/join ", ")))
+      (->> res
+           (pmap (fn [{:keys [bot] :as bot-config}]
+                   (when-let [f (->bot-fn bot "init!")]
+                     (f (assoc bot-config :db-url db-url)))
+                   (let [threads (->> (db/q db-url ["select * from sessions where bot = ?" bot])
+                                      (group-by :thread-id))]
+                     [(keyword bot) (cond-> (dissoc bot-config :bot)
+                                      (seq threads) (assoc :threads threads))])))
+           (into {})
+           (reset! bots))))
+
+  ;; Event loop
   (go-loop []
     (let [[v c] (alts! [in ctrl])]
       (if (= c ctrl)
-        (<! (stop-bots!> (keys @bots)))
+        (<! (stop!> db-url))
         (let [err (event-checker v)
               {:keys [recipient sender text]} v
               [bot params] (some (fn [[bot params]]
@@ -132,6 +160,6 @@
                     (debugf "Running actions for bot=%s thread-id=%s session-id=%s text=%s context=%s"
                             bot sender session-id text (pr-str context))
                     (some->> (run-actions!> bot params sender session-id text context)
-                      <! ;; TODO don't block here
-                      (swap! bots assoc-in [bot :threads sender 0 :context]))))
+                             <! ;; TODO don't block here
+                             (swap! bots assoc-in [bot :threads sender 0 :context]))))
           (recur))))))

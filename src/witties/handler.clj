@@ -2,7 +2,6 @@
   (:gen-class :main true)
   (:require [clojure.core.async :refer [<!! >! chan close! go put!]]
             [clojure.string :as string]
-            [clojure.tools.nrepl.server :as nrepl]
             [aleph.http :as http]
             [cheshire.core :as j]
             [compojure.core :refer [defroutes GET POST rfn]]
@@ -14,7 +13,8 @@
             [ring.middleware.keyword-params :refer [wrap-keyword-params]]
             [ring.middleware.params :refer [wrap-params]]
             [taoensso.timbre :refer [debugf infof warnf]]
-            [witties.core :as core]))
+            [witties.core :as core]
+            [witties.db :as db]))
 
 (defonce state (atom nil))
 
@@ -109,30 +109,38 @@
       wrap-params
       wrap-absolute-redirects))
 
-(defn reset-state! []
-  (when-let [{:keys [core-chan ctrl-chan event-chan http-server nrepl-server]} @state]
+(defn reset-state!
+  []
+  (when-let [{:keys [core-chan ctrl-chan event-chan http-server]} @state]
+    (infof "Cleaning up...")
     (when http-server (.close http-server))
-    (when nrepl-server (nrepl/stop-server nrepl-server))
     (when ctrl-chan
       (put! ctrl-chan :stop)
       (close! ctrl-chan))
     (when event-chan (close! event-chan))
     (when core-chan (<!! core-chan))
-    (reset! state nil)))
+    (reset! state nil)
+    (infof "...all good!")))
+
+(defn shutdown-hook
+  []
+  (reset-state!)
+  (infof "Shutting down..."))
 
 (defn -main
   [& args]
+  (when-not @state
+    (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown-hook)))
   (reset-state!)
-  (let [http-port (or (some-> (System/getenv "HTTP_PORT") (Integer.)) 8080)
-        nrepl-port (or (some-> (System/getenv "NREPL_PORT") (Integer.)) 8090)
+  (let [http-port (or (some-> (System/getenv "PORT") (Integer.)) 8080)
         fb-verify-token (System/getenv "FB_VERIFY_TOKEN")
+        db-url (System/getenv "DATABASE_URL")
         event-chan (chan)
         ctrl-chan (chan)
-        core-chan (core/init! event-chan ctrl-chan)
+        core-chan (core/init! db-url event-chan ctrl-chan)
         state' {:http-server (http/start-server app {:port http-port})
-                :nrepl-server (nrepl/start-server :bind "0.0.0.0"
-                                                  :port nrepl-port)
                 :fb-verify-token fb-verify-token
+                :db-url db-url
                 :event-chan event-chan
                 :ctrl-chan ctrl-chan
                 :core-chan core-chan}]
