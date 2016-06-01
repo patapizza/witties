@@ -3,6 +3,7 @@
   (:require [clojure.core.async :refer [<!! >! chan close! go put!]]
             [clojure.string :as string]
             [aleph.http :as http]
+            [aleph.netty :as netty]
             [cheshire.core :as j]
             [compojure.core :refer [defroutes GET POST rfn]]
             [compojure.response :refer [Renderable]]
@@ -12,7 +13,7 @@
             [ring.middleware.json :refer [wrap-json-body]]
             [ring.middleware.keyword-params :refer [wrap-keyword-params]]
             [ring.middleware.params :refer [wrap-params]]
-            [taoensso.timbre :refer [debugf infof warnf]]
+            [taoensso.timbre :refer [debugf errorf infof warnf]]
             [witties.core :as core]
             [witties.db :as db]))
 
@@ -122,6 +123,14 @@
     (reset! state nil)
     (infof "...all good!")))
 
+(defn handle-uncaught-exceptions
+  []
+  (Thread/setDefaultUncaughtExceptionHandler
+   (reify
+     Thread$UncaughtExceptionHandler
+     (uncaughtException [this thread t]
+       (errorf t "Uncaught exceptionon thread=%s" thread)))))
+
 (defn shutdown-hook
   []
   (reset-state!)
@@ -129,6 +138,7 @@
 
 (defn -main
   [& args]
+  (handle-uncaught-exceptions)
   (when-not @state
     (.addShutdownHook (Runtime/getRuntime) (Thread. shutdown-hook)))
   (reset-state!)
@@ -138,11 +148,14 @@
         event-chan (chan)
         ctrl-chan (chan)
         core-chan (core/init! db-url event-chan ctrl-chan)
-        state' {:http-server (http/start-server app {:port http-port})
+        http-server (http/start-server app {:port http-port})
+        state' {:http-server http-server
                 :fb-verify-token fb-verify-token
                 :db-url db-url
                 :event-chan event-chan
                 :ctrl-chan ctrl-chan
                 :core-chan core-chan}]
     (reset! state state')
-    (infof "Up and running.")))
+    (infof "Up and running.")
+    ;; Aleph uses only daemon threads, prevent process from closing
+    (netty/wait-for-close http-server)))

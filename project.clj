@@ -6,7 +6,7 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/core.async "0.2.374"]
                  [org.clojure/java.jdbc "0.6.1"]
-                 [aleph "0.4.1"]
+                 [aleph "0.4.2-alpha4"]
                  [cheshire "5.6.1"]
                  [clj-time "0.11.0"]
                  [com.taoensso/timbre "4.3.1"]

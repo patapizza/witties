@@ -1,1 +1,1 @@
-web: java -jar target/witties-standalone.jar
+web: java $JVM_OPTS -jar target/witties-standalone.jar
