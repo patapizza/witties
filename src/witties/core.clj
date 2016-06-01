@@ -20,6 +20,7 @@
    {:bot {:wit-token \"\"
           :fb-page-token \"\"
           :fb-page-id \"42\"
+          :fb-app-secret \"abc\"
           :threads {\"42\" [{:session-id \"\"
                              :started-at 241423535
                              :context {}}]}}}"
@@ -31,6 +32,14 @@
    :recipient s/Str
    :text s/Str})
 (def event-checker (s/checker Event))
+
+;; TODO: use fb-page-id as bot-id
+(defn bot-for-page
+  [page-id]
+  (some (fn [[bot params]]
+          (when (= page-id (:fb-page-id params))
+            [bot params]))
+        @bots))
 
 (defn ->bot-fn
   [bot f]
@@ -149,17 +158,14 @@
         (<! (stop!> db-url))
         (let [err (event-checker v)
               {:keys [recipient sender text]} v
-              [bot params] (some (fn [[bot params]]
-                                   (when (= recipient (:fb-page-id params))
-                                     [bot (dissoc params :threads)]))
-                                 @bots)]
+              [bot params] (bot-for-page recipient)]
           (cond
             err (warnf "malformed event event=%s err=%s" v err)
             (not bot) (warnf "couldn't find bot for recipient=%s" recipient)
             :else (let [{:keys [session-id context]} (get-or-create-session! bot sender)]
                     (debugf "Running actions for bot=%s thread-id=%s session-id=%s text=%s context=%s"
                             bot sender session-id text (pr-str context))
-                    (some->> (run-actions!> bot params sender session-id text context)
+                    (some->> (run-actions!> bot (dissoc params :threads) sender session-id text context)
                              <! ;; TODO don't block here
                              (swap! bots assoc-in [bot :threads sender 0 :context]))))
           (recur))))))

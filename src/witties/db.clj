@@ -67,7 +67,8 @@
   (create-table-if-not-exists-ddl :bots [[:bot "varchar(20)" :primary :key]
                                          [:wit_token :text]
                                          [:fb_page_id "varchar(64)"]
-                                         [:fb_page_token :text]]))
+                                         [:fb_page_token :text]
+                                         [:fb_app_secret "varchar(64)"]]))
 (def sessions-table-query
   (create-table-if-not-exists-ddl :sessions [[:bot "varchar(20)"]
                                              [:thread_id "varchar(64)"]

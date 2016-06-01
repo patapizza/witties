@@ -8,6 +8,7 @@
             [compojure.core :refer [defroutes GET POST rfn]]
             [compojure.response :refer [Renderable]]
             [manifold.stream :as stream]
+            [pandect.algo.sha1 :refer [sha1-hmac]]
             [plumbing.core :refer [update-in-when]]
             [ring.middleware.absolute-redirects :refer [wrap-absolute-redirects]]
             [ring.middleware.json :refer [wrap-json-body]]
@@ -43,7 +44,6 @@
 
 (defhandler fb-get
   [{:keys [params] {:keys [fb-verify-token]} :state :as request}]
-  ;; TODO save origin and check in fb-post-handler
   (if (and (= (get params "hub.mode") "subscribe")
            (= (get params "hub.verify_token") fb-verify-token)
            (get params "hub.challenge"))
@@ -51,10 +51,27 @@
      :body (get params "hub.challenge")}
     {:status 400}))
 
+(defn verified?
+  "Verify origin."
+  [signature payload]
+  (->> payload
+       :entry
+       first
+       :id
+       core/bot-for-page
+       second
+       :fb-app-secret
+       (sha1-hmac (j/encode payload))
+       (str "sha1=")
+       (= signature)))
+
 (defhandler fb-post
-  [{:keys [body] {:keys [event-chan]} :state :as request}]
-  (when (= "page" (:object body))
-    (let [events (->> (:entry body)
+  [{:keys [headers] :as request
+    {:keys [entry object] :as body} :body
+    {:keys [event-chan]} :state}]
+  (when (and (verified? (get headers "x-hub-signature") body)
+             (= "page" object))
+    (let [events (->> entry
                       (mapcat (fn [{:keys [messaging]}]
                                 (keep (fn [{:keys [message recipient sender timestamp]}]
                                         ;; Ignoring everything but text messages
@@ -129,7 +146,7 @@
    (reify
      Thread$UncaughtExceptionHandler
      (uncaughtException [this thread t]
-       (errorf t "Uncaught exceptionon thread=%s" thread)))))
+       (errorf t "Uncaught exception on thread=%s" thread)))))
 
 (defn shutdown-hook
   []

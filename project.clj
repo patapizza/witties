@@ -15,6 +15,7 @@
                  [jarohen/chime "0.1.9"]
                  [manifold "0.1.4"]
                  [org.postgresql/postgresql "9.4.1208"]
+                 [pandect "0.6.0"]
                  [prismatic/plumbing "0.5.3"]
                  [prismatic/schema "1.1.1"]
                  [ring/ring-defaults "0.1.5"]
