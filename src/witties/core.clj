@@ -33,6 +33,8 @@
    :text s/Str})
 (def event-checker (s/checker Event))
 
+(def graceful-stop-ms 25000) ;; 25 seconds (30 seconds max on Heroku)
+
 ;; TODO: use fb-page-id as bot-id
 (defn bot-for-page
   [page-id]
@@ -100,12 +102,12 @@
     session
     (let [new-session {:session-id (str (UUID/randomUUID))
                        :started-at (-> (t/now) c/to-long)}]
-      (swap! bots update-in [bot :threads thread-id] (comp vec conj) new-session)
+      (swap! bots update-in [bot :threads thread-id] (fnil conj []) new-session)
       new-session)))
 
 (defn stop-bots!>
   "Gives each bot allowed-ms time to gracefully stop."
-  ([bots] (stop-bots!> bots 25000))
+  ([bots] (stop-bots!> bots graceful-stop-ms))
   ([bots allowed-ms]
    (let [bot->chan (->> bots
                         (map-from-keys #(when-let [f (->bot-fn % "stop!>")] (f)))

@@ -52,7 +52,7 @@
     {:status 400}))
 
 (defn verified?
-  "Verify origin."
+  "Verifies origin."
   [signature payload]
   (->> payload
        :entry
