@@ -30,6 +30,7 @@
 (def reminder-checker (s/checker Reminder))
 
 (def snooze-ms (* 1000 60 10)) ;; 10 minutes
+(def snooze-allowed-ms (* 1000 60 60)) ;; 1h
 
 ;; -----------------------------------------------------------------------------
 ;; Helpers
@@ -171,17 +172,19 @@
 
 (defn snooze-reminder!>
   [{:keys [fb-page-token] :as params} thread-id context]
-  (go (if-let [{:keys [about at]} (some->> (get @threads thread-id)
-                                           (filter :fired)
-                                           last
-                                           (<- (assoc :at (-> (t/now) c/to-long (+ snooze-ms))))
-                                           (reschedule-reminder! fb-page-token thread-id))]
-        (cond-> context
-          about (assoc :ok-reminder true
-                       :about :about
-                       :time (pretty-time at)
-                       :time-ms at))
-        context)))
+  (go (let [now (-> (t/now) c/to-long)
+            allowed? (comp (partial <= (- now snooze-allowed-ms)) :at)]
+        (if-let [{:keys [about at]} (some->> (get @threads thread-id)
+                                             (filter (every-pred :fired allowed?))
+                                             last
+                                             (<- (assoc :at (+ now snooze-ms)))
+                                             (reschedule-reminder! fb-page-token thread-id))]
+          (cond-> context
+            about (assoc :ok-reminder true
+                         :about about
+                         :time (pretty-time at)
+                         :time-ms at))
+          context))))
 
 ;; -----------------------------------------------------------------------------
 ;; Core interface
