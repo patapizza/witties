@@ -5,7 +5,7 @@
             [aleph.http :as http]
             [aleph.netty :as netty]
             [cheshire.core :as j]
-            [compojure.core :refer [defroutes GET POST rfn]]
+            [compojure.core :refer [defroutes ANY GET POST rfn]]
             [compojure.response :refer [Renderable]]
             [manifold.stream :as stream]
             [pandect.algo.sha1 :refer [sha1-hmac]]
@@ -47,9 +47,8 @@
   (if (and (= (get params "hub.mode") "subscribe")
            (= (get params "hub.verify_token") fb-verify-token)
            (get params "hub.challenge"))
-    {:status 200
-     :body (get params "hub.challenge")}
-    {:status 400}))
+    {:body (get params "hub.challenge") :status 200}
+    {:body "Bad Request" :status 400}))
 
 (defn verified?
   "Verifies origin."
@@ -87,6 +86,13 @@
         (put! event-chan (dissoc event :timestamp)))))
   {:status 200})
 
+(defhandler ping-any
+  [{:keys [request-method] :as request}]
+  (cond-> {:body "pong" :status 200}
+    ;; Compojure tries to assoc a nil body on the response on HEAD requests,
+    ;; which throws an Exception as the response is wrapped in a chan
+    (= :head request-method) (dissoc :body)))
+
 (defhandler default
   [request]
   {:body "Not Found" :status 404})
@@ -101,6 +107,7 @@
   (GET "/" [] index)
   (GET "/fb" [] fb-get)
   (POST "/fb" [] fb-post)
+  (ANY "/ping" [] ping-any)
   (rfn [] default))
 
 (defn wrap-deferred
