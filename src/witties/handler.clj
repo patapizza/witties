@@ -14,11 +14,13 @@
             [ring.middleware.json :refer [wrap-json-body]]
             [ring.middleware.keyword-params :refer [wrap-keyword-params]]
             [ring.middleware.params :refer [wrap-params]]
-            [taoensso.timbre :refer [debugf errorf infof warnf]]
+            [taoensso.timbre :as timbre :refer [debugf errorf infof warnf]]
             [witties.core :as core]
             [witties.db :as db]))
 
 (defonce state (atom nil))
+
+(timbre/set-level! :info)
 
 (defn log
   [{:keys [body query-string request-method uri]} resp]
