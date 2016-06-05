@@ -30,7 +30,7 @@
 (def reminder-checker (s/checker Reminder))
 
 (def snooze-ms (* 1000 60 10)) ;; 10 minutes
-(def snooze-allowed-ms (* 1000 60 60)) ;; 1h
+(def snooze-allowed-ms (* 1000 60 5)) ;; 5 minutes
 
 ;; -----------------------------------------------------------------------------
 ;; Helpers
@@ -74,7 +74,8 @@
   [thread-id :- s/Str about :- s/Str]
   (let [{to-del true to-keep false} (->> (get @threads thread-id)
                                          (group-by #(= about (:about %))))]
-    (map stop-reminder! to-del)
+    (doseq [reminder to-del]
+      (stop-reminder! reminder))
     (swap! threads assoc thread-id to-keep)
     (when (seq to-del)
       (count (remove :fired to-keep)))))
@@ -137,13 +138,14 @@
   (go (let [time-ms (some-> (get-in entities [:datetime 0 :value]) c/to-long)
             about (get-in entities [:reminder 0 :value])
             intent (get-in entities [:intent 0 :value])]
-        (cond
-          (= "show_reminders" intent) (assoc context :reminders (pretty-reminders thread-id))
-          (= "snooze_reminder" intent) (assoc context :snooze true)
-          :else (cond-> context
-                  about (assoc :about about)
-                  time-ms (assoc :time-ms time-ms
-                                 :time (pretty-time time-ms)))))))
+        (cond-> context
+          (= "cancel_reminder" intent) (assoc :cancel true)
+          (= "set_reminder" intent) (assoc :set true)
+          (= "show_reminders" intent) (assoc :reminders (pretty-reminders thread-id))
+          (= "snooze_reminder" intent) (assoc :snooze true)
+          about (assoc :about about)
+          time-ms (assoc :time-ms time-ms
+                         :time (pretty-time time-ms))))))
 
 (defn error!>
   [{:keys [fb-page-token]} thread-id context msg]
@@ -170,21 +172,24 @@
         (cond-> context
           success? (assoc :ok-reminder true)))))
 
+(s/defn snoozable? :- s/Bool
+  "True if reminder has fired off no longer than `snooze-allowed-ms` ago."
+  [{:keys [at]} :- Reminder]
+  (<= (-> (t/now) c/to-long (- snooze-allowed-ms)) at))
+
 (defn snooze-reminder!>
   [{:keys [fb-page-token] :as params} thread-id context]
-  (go (let [now (-> (t/now) c/to-long)
-            allowed? (comp (partial <= (- now snooze-allowed-ms)) :at)]
-        (if-let [{:keys [about at]} (some->> (get @threads thread-id)
-                                             (filter (every-pred :fired allowed?))
-                                             last
-                                             (<- (assoc :at (+ now snooze-ms)))
-                                             (reschedule-reminder! fb-page-token thread-id))]
-          (cond-> context
-            about (assoc :ok-reminder true
-                         :about about
-                         :time (pretty-time at)
-                         :time-ms at))
-          context))))
+  (go (if-let [{:keys [about at]} (some->> (get @threads thread-id)
+                                           (filter (every-pred :fired snoozable?))
+                                           last
+                                           (<- (assoc :at (-> (t/now) c/to-long (+ snooze-ms))))
+                                           (reschedule-reminder! fb-page-token thread-id))]
+        (cond-> context
+          about (assoc :ok-reminder true
+                       :about about
+                       :time (pretty-time at)
+                       :time-ms at))
+        context)))
 
 ;; -----------------------------------------------------------------------------
 ;; Core interface
@@ -199,14 +204,16 @@
 
 (defn stop!>
   "Saves reminders, if any.
-   Doesn't save active reminders."
+   Discards active reminders that can't be snoozed."
   []
   (go (when-let [db-url @db-ref]
         (db/exec! db-url "truncate table woodpecker")
         (->> @threads
              (mapcat (fn [[thread-id reminders]]
                        (->> reminders
-                            (remove :fired)
-                            (map (comp #(assoc % :thread-id thread-id)
-                                       stop-reminder!)))))
+                            (remove (every-pred :fired (comp not snoozable?)))
+                            (map #(-> (stop-reminder! %)
+                                      (dissoc :fired)
+                                      (assoc :thread-id thread-id)))
+                            doall)))
              (db/insert-rows! db-url :woodpecker)))))
