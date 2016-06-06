@@ -31,7 +31,7 @@
                 meth (str wit-url path) (pr-str opts) (pr-str resp))
         (if error
           (do (warnf "received error=%s" error)
-              (:error resp))
+              error)
           resp))))
 
 (defn message!>

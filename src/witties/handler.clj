@@ -9,11 +9,11 @@
             [compojure.response :refer [Renderable]]
             [manifold.stream :as stream]
             [pandect.algo.sha1 :refer [sha1-hmac]]
-            [plumbing.core :refer [update-in-when]]
             [ring.middleware.absolute-redirects :refer [wrap-absolute-redirects]]
             [ring.middleware.json :refer [wrap-json-body]]
             [ring.middleware.keyword-params :refer [wrap-keyword-params]]
             [ring.middleware.params :refer [wrap-params]]
+            [schema.core :as s]
             [taoensso.timbre :as timbre :refer [debugf errorf infof warnf]]
             [witties.core :as core]
             [witties.db :as db]))
@@ -55,16 +55,28 @@
 (defn verified?
   "Verifies origin."
   [signature payload]
-  (->> payload
-       :entry
-       first
-       :id
-       core/bot-for-page
-       second
-       :fb-app-secret
-       (sha1-hmac (j/encode payload))
-       (str "sha1=")
-       (= signature)))
+  (some->> payload
+           :entry
+           first
+           :id
+           core/bot-for-page
+           second
+           :fb-app-secret
+           (sha1-hmac (j/encode payload))
+           (str "sha1=")
+           (= signature)))
+
+(s/defn messaging-entry->event :- (s/maybe core/Event)
+  [{:keys [recipient sender timestamp]
+    {:keys [attachments sticker_id text]} :message
+    {:keys [payload]} :postback}]
+  (when (or attachments payload sticker_id text)
+    (cond-> {:recipient (:id recipient)
+             :sender (:id sender)}
+      attachments (assoc :attachments attachments)
+      payload (assoc :postback payload)
+      sticker_id (assoc :sticker sticker_id)
+      text (assoc :text text))))
 
 (defhandler fb-post
   [{:keys [headers] :as request
@@ -73,22 +85,15 @@
   (when (and (verified? (get headers "x-hub-signature") body)
              (= "page" object))
     (let [events (->> entry
-                      (mapcat (fn [{:keys [messaging]}]
-                                (keep (fn [{:keys [message recipient sender timestamp]}]
-                                        ;; Ignoring everything but text messages
-                                        (when-let [text (:text message)]
-                                          {:recipient (:id recipient)
-                                           :sender (:id sender)
-                                           :text text
-                                           :timestamp timestamp}))
-                                      messaging)))
+                      (mapcat (comp (partial keep messaging-entry->event)
+                                    :messaging))
                       (sort-by :timestamp))]
       (doseq [event events]
         (debugf "Sending event=%s" (pr-str (dissoc event :timestamp)))
         (put! event-chan (dissoc event :timestamp)))))
   {:status 200})
 
-(defhandler ping-any
+(defhandler ping
   [{:keys [request-method] :as request}]
   (cond-> {:body "pong" :status 200}
     ;; Compojure tries to assoc a nil body on the response on HEAD requests,
@@ -109,7 +114,7 @@
   (GET "/" [] index)
   (GET "/fb" [] fb-get)
   (POST "/fb" [] fb-post)
-  (ANY "/ping" [] ping-any)
+  (ANY "/ping" [] ping)
   (rfn [] default))
 
 (defn wrap-deferred
@@ -171,7 +176,7 @@
   (let [http-port (or (some-> (System/getenv "PORT") (Integer.)) 8080)
         fb-verify-token (System/getenv "FB_VERIFY_TOKEN")
         db-url (System/getenv "DATABASE_URL")
-        event-chan (chan)
+        event-chan (chan 100)
         ctrl-chan (chan)
         core-chan (core/init! db-url event-chan ctrl-chan)
         http-server (http/start-server app {:port http-port})

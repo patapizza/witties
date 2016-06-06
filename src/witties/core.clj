@@ -26,14 +26,23 @@
                              :context {}}]}}}"
   (atom nil))
 
-(def max-steps 10)
+(def Attachment
+  {:type (s/enum "audio" "image" "video")
+   :payload {:url s/Str}})
 (def Event
-  {:sender s/Str
-   :recipient s/Str
-   :text s/Str})
-(def event-checker (s/checker Event))
+  (s/constrained
+   {:sender s/Str
+    :recipient s/Str
+    (s/optional-key :attachments) [Attachment]
+    (s/optional-key :postback) s/Str
+    (s/optional-key :sticker) s/Num
+    (s/optional-key :text) s/Str}
+   (some-fn :attachments :postback :sticker :text)))
+(def event-checker
+  (s/checker Event))
 
 (def graceful-stop-ms 25000) ;; 25 seconds (30 seconds max on Heroku)
+(def max-steps 10)
 
 ;; TODO: use fb-page-id as bot-id
 (defn bot-for-page
@@ -154,6 +163,7 @@
            (reset! bots))))
 
   ;; Event loop
+  ;; TODO group events per bot, one worker per bot
   (go-loop []
     (let [[v c] (alts! [in ctrl])]
       (if (= c ctrl)
@@ -162,12 +172,16 @@
               {:keys [recipient sender text]} v
               [bot params] (bot-for-page recipient)]
           (cond
-            err (warnf "malformed event event=%s err=%s" v err)
+            err (warnf "malformed event %s err=%s" v (pr-str err))
             (not bot) (warnf "couldn't find bot for recipient=%s" recipient)
+            (not text) (let [msg "Oops I can only deal with text right now."]
+                         (infof "Got no text for bot=%s from thread-id=%s. Executing say!> with msg=%s"
+                                bot sender msg)
+                         (<! ((->bot-fn bot "say!>") (dissoc params :threads) sender {} msg)))
             :else (let [{:keys [session-id context]} (get-or-create-session! bot sender)]
                     (debugf "Running actions for bot=%s thread-id=%s session-id=%s text=%s context=%s"
                             bot sender session-id text (pr-str context))
                     (some->> (run-actions!> bot (dissoc params :threads) sender session-id text context)
-                             <! ;; TODO don't block here
+                             <!
                              (swap! bots assoc-in [bot :threads sender 0 :context]))))
           (recur))))))
