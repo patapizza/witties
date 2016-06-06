@@ -46,25 +46,17 @@
 
 (defhandler fb-get
   [{:keys [params] {:keys [fb-verify-token]} :state :as request}]
-  (if (and (= (get params "hub.mode") "subscribe")
-           (= (get params "hub.verify_token") fb-verify-token)
-           (get params "hub.challenge"))
-    {:body (get params "hub.challenge") :status 200}
+  (if-let [challenge (and (= "subscribe" (get params "hub.mode"))
+                          (= fb-verify-token (get params "hub.verify_token"))
+                          (get params "hub.challenge"))]
+    {:body challenge :status 200}
     {:body "Bad Request" :status 400}))
 
 (defn verified?
   "Verifies origin."
-  [signature payload]
-  (some->> payload
-           :entry
-           first
-           :id
-           core/bot-for-page
-           second
-           :fb-app-secret
-           (sha1-hmac (j/encode payload))
-           (str "sha1=")
-           (= signature)))
+  [{:keys [headers raw-body]} secret]
+  (= (get headers "x-hub-signature")
+     (str "sha1=" (sha1-hmac (slurp raw-body) secret))))
 
 (s/defn messaging-entry->event :- (s/maybe core/Event)
   [{:keys [recipient sender timestamp]
@@ -72,17 +64,23 @@
     {:keys [payload]} :postback}]
   (when (or attachments payload sticker_id text)
     (cond-> {:recipient (:id recipient)
-             :sender (:id sender)}
+             :sender (:id sender)
+             :timestamp timestamp}
       attachments (assoc :attachments attachments)
       payload (assoc :postback payload)
       sticker_id (assoc :sticker sticker_id)
       text (assoc :text text))))
 
+(defn entry->secret
+  "Returns the app secret from page id in `entry`."
+  [entry]
+  (some->> entry first :id core/bot-for-page second :fb-app-secret))
+
 (defhandler fb-post
-  [{:keys [headers] :as request
+  [{:as request
     {:keys [entry object] :as body} :body
     {:keys [event-chan]} :state}]
-  (when (and (verified? (get headers "x-hub-signature") body)
+  (when (and (verified? request (entry->secret entry))
              (= "page" object))
     (let [events (->> entry
                       (mapcat (comp (partial keep messaging-entry->event)
@@ -117,6 +115,23 @@
   (ANY "/ping" [] ping)
   (rfn [] default))
 
+(defn wrap-raw-body
+  "Copies stream reference to `raw-body`, and marks initial position."
+  [handler]
+  (fn [req]
+    (if-let [body (:body req)]
+      (do (.mark body 1e6)
+          (handler (assoc req :raw-body body)))
+      (handler req))))
+
+(defn wrap-reset-raw-body
+  "Resets `raw-body` to its marked position."
+  [handler]
+  (fn [req]
+    (when-let [body (:raw-body req)]
+      (.reset body))
+    (handler req)))
+
 (defn wrap-deferred
   "Converts a chan to a manifold.deferred"
   [handler]
@@ -136,7 +151,9 @@
   (-> app-routes
       wrap-deferred
       wrap-state
+      wrap-reset-raw-body
       (wrap-json-body {:keywords? true})
+      wrap-raw-body
       wrap-keyword-params
       wrap-params
       wrap-absolute-redirects))
