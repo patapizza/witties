@@ -125,6 +125,20 @@
                (string/join ", "))
       "none"))
 
+(s/defn solve-datetime :- (s/maybe s/Int)
+  "Considers the first datetime entity found.
+   Returns the first datetime occurring in the future.
+   For intervals, takes the outer bound."
+  [datetimes :- [(s/pred map?)]]
+  (let [now (-> (t/now) c/to-long)]
+    (->> datetimes
+         first
+         :values
+         (map (comp c/to-long :value (some-fn :to identity)))
+         sort
+         (drop-while (partial > now))
+         first)))
+
 ;; -----------------------------------------------------------------------------
 ;; Wit actions
 
@@ -135,7 +149,7 @@
 
 (defn merge!>
   [params thread-id context entities msg]
-  (go (let [time-ms (some-> (get-in entities [:datetime 0 :value]) c/to-long)
+  (go (let [time-ms (some-> entities :datetime solve-datetime)
             about (get-in entities [:reminder 0 :value])
             intent (get-in entities [:intent 0 :value])]
         (cond-> context
