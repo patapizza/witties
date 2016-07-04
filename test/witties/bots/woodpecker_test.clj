@@ -48,51 +48,85 @@
     {}))
 
 ;; TODO context deltas
-;; TODO test bot responses
 (defmacro story
   [story-name & steps]
   `(deftest ~(symbol (str "story-" story-name))
      (let [~'session-id (str "test-" (UUID/randomUUID))]
-       ~@(map (fn [[msg context action]]
+       ~@(map (fn [[msg context action & [bot]]]
                 (condp = action
                   "merge" `(is (= "merge" (:type (converse!! ~'session-id ~msg ~context))))
-                  "say" `(is (= "msg" (:type (converse!! ~'session-id ~msg ~context))))
+                  "say" `(let [~'resp (converse!! ~'session-id ~msg ~context)]
+                           (is (= "msg" (:type ~'resp)))
+                           (is (re-find ~bot (:msg ~'resp))))
+                  "stop" `(is (= "stop" (:type (converse!! ~'session-id ~msg ~context))))
                   `(is (= ~action (:action (converse!! ~'session-id ~msg ~context))))))
-              (butlast steps))
-       ~(let [[msg context] (last steps)]
-         `(is (= "stop" (:type (converse!! ~'session-id ~msg ~context))))))))
+              (butlast steps)))))
 
 (story "cancel"
   ["cancel my reminder to buy flowers" {} "merge"]
   [nil {:about "buy flowers" :cancel true} "cancel-reminder"]
-  [nil {:about "buy flowers" :cancel true :ok-cancel true :reminders 2} "say"]
+  [nil {:about "buy flowers" :cancel true :ok-cancel true :reminders 2} "say" #"Okay, I won't remind you"]
   [nil {:about "buy flowers" :cancel true :ok-cancel true :reminders 2} "clear-context"]
-  [nil {}])
+  [nil {} "stop"])
 
 (story "list"
   ["show me my reminders" {} "merge"]
-  [nil {:reminders "reminders"} "say"]
+  [nil {:reminders "reminders"} "say" #"Here are your"]
   [nil {:reminders "reminders"} "clear-context"]
-  [nil {}])
+  [nil {} "stop"])
 
 (story "set"
   ["Remind me to buy flowers tomorrow morning" {} "merge"]
   [nil {:about "buy flowers" :set true :time "tomorrow morning" :time-ms 42} "set-reminder"]
-  [nil {:about "buy flowers" :set true :time "tomorrow morning" :time-ms 42 :ok-reminder true} "say"]
+  [nil {:about "buy flowers" :set true :time "tomorrow morning" :time-ms 42 :ok-reminder true} "say" #"OK I'll remind you"]
   [nil {:about "buy flowers" :set true :time "tomorrow morning" :time-ms 42 :ok-reminder true} "clear-context"]
-  [nil {}])
+  [nil {} "stop"])
 
 (story "snooze"
   ["snooze" {} "merge"]
   [nil {:snooze true} "snooze-reminder"]
-  [nil {:snooze true :time "in 10 minutes" :ok-reminder true :about "buy flowers"} "say"]
+  [nil {:snooze true :time "in 10 minutes" :ok-reminder true :about "buy flowers"} "say" #"OK I'll remind you"]
   [nil {:snooze true :time "in 10 minutes" :ok-reminder true :about "buy flowers"} "clear-context"]
-  [nil {}])
+  [nil {} "stop"])
 
 ;; Dev instance
-#_(story "happy-path"
-  ["Remind me to buy flowers tomorrow morning" {} "merge"]
-  [nil {:about "buy flowers" :set true :time "tomorrow morning" :time-ms 42} "set-reminder"]
-  [nil {:about "buy flowers" :set true :time "tomorrow morning" :time-ms 42 :ok-reminder true} "say"]
-  [nil {:about "buy flowers" :set true :time "tomorrow morning" :time-ms 42 :ok-reminder true} "done-set"]
-  [nil {}])
+#_(story "greetings+cancel+show+thanks"
+  ["hi there" {} "merge"]
+  [nil {:greetings true} "say" #"Hey!"]
+  [nil {:greetings true} "done-greetings"]
+  [nil {} "stop"]
+  ["cancel my reminder" {} "merge"]
+  [nil {:cancel true} "say" #"Which reminder"]
+  [nil {:cancel true} "stop"]
+  ["show my reminders" {:cancel true} "merge"]
+  [nil {:cancel true :show true :reminders "reminders"} "say" #"Here are your"]
+  [nil {:cancel true :show true :reminders "reminders"} "done-show"]
+  [nil {:cancel true} "stop"]
+  ["to buy flowers" {:cancel true} "merge"]
+  [nil {:cancel true :about "buy flowers"} "cancel-reminder"]
+  [nil {:cancel true :about "buy flowers" :ok-cancel true :reminders-left 0} "say" #"Okay, I won't remind you"]
+  [nil {:cancel true :about "buy flowers" :ok-cancel true :reminders-left 0} "done-cancel"]
+  [nil {} "stop"]
+  ["thanks" {} "merge"]
+  [nil {:thanks true} "say" #"You're welcome"]
+  [nil {:thanks true} "done-thanks"]
+  [nil {} "stop"])
+
+#_(story "set+oos+snooze"
+  ["remind me to eat" {} "merge"]
+  [nil {:set true :about "eat"} "say" #"When would you"]
+  [nil {:set true :about "eat"} "stop"]
+  ["I'm batman" {:set true :about "eat"} "merge"]
+  [nil {:set true :about "eat" :out-of-scope true} "say" #"Oops, I didn't catch that"]
+  [nil {:set true :about "eat" :out-of-scope true} "done-oos"]
+  [nil {:set true :about "eat"} "stop"]
+  ["snooze" {:set true :about "eat"} "merge"]
+  [nil {:set true :about "eat" :snooze true} "snooze-reminder"]
+  [nil {:set true :about "eat" :snooze true} "say" #"Oops, I didn't find any"]
+  [nil {:set true :about "eat" :snooze true} "done-snooze"]
+  [nil {:set true :about "eat"} "stop"]
+  ["in 2 minutes" {:set true :about "eat"} "merge"]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2} "set-reminder"]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "say" #"OK I'll remind you"]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "done-set"]
+  [nil {} "stop"])
