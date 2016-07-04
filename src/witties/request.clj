@@ -18,11 +18,12 @@
 ;; -----------------------------------------------------------------------------
 ;; Wit
 
+(def wit-api-version 20160703)
 (def wit-url "https://api.wit.ai")
 
 (defn wit!>
   [access-token meth path opts]
-  (go (let [default-opts {:headers {"Accept" "application/json"
+  (go (let [default-opts {:headers {"Accept" (format "application/vnd.wit.%s+json" wit-api-version)
                                     "Authorization" (str "Bearer " access-token)
                                     "Content-Type" "application/json"}}
             opts (merge default-opts opts)
