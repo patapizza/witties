@@ -60,7 +60,7 @@
                            (is (re-find ~bot (:msg ~'resp))))
                   "stop" `(is (= "stop" (:type (converse!! ~'session-id ~msg ~context))))
                   `(is (= ~action (:action (converse!! ~'session-id ~msg ~context))))))
-              (butlast steps)))))
+              steps))))
 
 (story "cancel"
   ["cancel my reminder to buy flowers" {} "merge"]
@@ -89,44 +89,143 @@
   [nil {:snooze true :time "in 10 minutes" :ok-reminder true :about "buy flowers"} "clear-context"]
   [nil {} "stop"])
 
-;; Dev instance
-#_(story "greetings+cancel+show+thanks"
-  ["hi there" {} "merge"]
-  [nil {:greetings true} "say" #"Hey!"]
-  [nil {:greetings true} "done-greetings"]
-  [nil {} "stop"]
-  ["cancel my reminder" {} "merge"]
-  [nil {:cancel true} "say" #"Which reminder"]
-  [nil {:cancel true} "stop"]
-  ["show my reminders" {:cancel true} "merge"]
-  [nil {:cancel true :show true :reminders "reminders"} "say" #"Here are your"]
-  [nil {:cancel true :show true :reminders "reminders"} "done-show"]
-  [nil {:cancel true} "stop"]
-  ["to buy flowers" {:cancel true} "merge"]
-  [nil {:cancel true :about "buy flowers"} "cancel-reminder"]
-  [nil {:cancel true :about "buy flowers" :ok-cancel true :reminders-left 0} "say" #"Okay, I won't remind you"]
-  [nil {:cancel true :about "buy flowers" :ok-cancel true :reminders-left 0} "done-cancel"]
-  [nil {} "stop"]
-  ["thanks" {} "merge"]
-  [nil {:thanks true} "say" #"You're welcome"]
-  [nil {:thanks true} "done-thanks"]
-  [nil {} "stop"])
+(def cancel-ko #"any reminders matching")
+(def cancel-ok #"Okay, I won't remind you")
+(def cancel-which #"Which reminder")
+(def greet #"Hey!")
+(def oos #"Oops, I didn't catch that")
+(def set-ok #"OK I'll remind you")
+(def set-what #"What would you")
+(def set-when #"When would you")
+(def snooze-ko #"any reminders to snooze")
+(def welcome #"You're welcome")
 
-#_(story "set+oos+snooze"
-  ["remind me to eat" {} "merge"]
-  [nil {:set true :about "eat"} "say" #"When would you"]
-  [nil {:set true :about "eat"} "stop"]
-  ["I'm batman" {:set true :about "eat"} "merge"]
-  [nil {:set true :about "eat" :out-of-scope true} "say" #"Oops, I didn't catch that"]
-  [nil {:set true :about "eat" :out-of-scope true} "done-oos"]
-  [nil {:set true :about "eat"} "stop"]
-  ["snooze" {:set true :about "eat"} "merge"]
-  [nil {:set true :about "eat" :snooze true} "snooze-reminder"]
-  [nil {:set true :about "eat" :snooze true} "say" #"Oops, I didn't find any"]
-  [nil {:set true :about "eat" :snooze true} "done-snooze"]
+;; Dev instance
+
+#_(story "slow flow"
+  ["hi" {} "say" greet]
+  [nil {} "stop"]
+  ["I want to set a reminder" {} "merge"]
+  [nil {:set true} "say" set-what]
+  [nil {:set true} "stop"]
+  ["to eat" {:set true} "merge"]
+  [nil {:set true :about "eat"} "say" set-when]
   [nil {:set true :about "eat"} "stop"]
   ["in 2 minutes" {:set true :about "eat"} "merge"]
   [nil {:set true :about "eat" :time "in 2'" :time-ms 2} "set-reminder"]
-  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "say" #"OK I'll remind you"]
-  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "done-set"]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "say" set-ok]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "clear-context"]
+  [nil {} "stop"]
+  ["thank you" {} "say" welcome]
+  [nil {} "stop"])
+
+#_(story "quick flow"
+  ["remind me to buy flowers in 2 minutes" {} "merge"]
+  [nil {:set true :about "buy flowers" :time "in 2'" :time-ms 2} "set-reminder"]
+  [nil {:set true :about "buy flowers" :time "in 2'" :time-ms 2 :ok-reminder true} "say" set-ok]
+  [nil {:set true :about "buy flowers" :time "in 2'" :time-ms 2 :ok-reminder true} "clear-context"]
+  [nil {} "stop"])
+
+#_(story "cancel flow with listing"
+  ["I'd like to cancel a reminder" {} "merge"]
+  [nil {:cancel true} "say" cancel-which]
+  [nil {:cancel true} "stop"]
+  ["which ones do I have?" {:cancel true} "show-reminders"]
+  [nil {:cancel true} "stop"]
+  ["to eat" {:cancel true} "merge"]
+  [nil {:cancel true :about "eat"} "cancel-reminder"]
+  [nil {:cancel true :about "eat" :ok-cancel true :reminders-left 0} "say" cancel-ok]
+  [nil {:cancel true :about "eat" :ok-cancel true :reminders-left 0} "done-cancel"]
+  [nil {} "stop"])
+
+#_(story "greetings+cancel+show+thanks"
+  ["hi there" {} "say" greet]
+  [nil {} "stop"]
+  ["cancel my reminder" {} "merge"]
+  [nil {:cancel true} "say" cancel-which]
+  [nil {:cancel true} "stop"]
+  ["show my reminders" {:cancel true} "show-reminders"]
+  [nil {:cancel true} "stop"]
+  ["to buy flowers" {:cancel true} "merge"]
+  [nil {:cancel true :about "buy flowers"} "cancel-reminder"]
+  [nil {:cancel true :about "buy flowers" :ok-cancel true :reminders-left 0} "say" cancel-ok]
+  [nil {:cancel true :about "buy flowers" :ok-cancel true :reminders-left 0} "done-cancel"]
+  [nil {} "stop"]
+  ["thanks" {} "say" welcome]
+  [nil {} "stop"])
+
+#_(story "set+oos+snooze+thanks"
+  ["remind me to eat" {} "merge"]
+  [nil {:set true :about "eat"} "say" set-when]
+  [nil {:set true :about "eat"} "stop"]
+  ["I'm batman" {:set true :about "eat"} "say" oos]
+  [nil {:set true :about "eat"} "stop"]
+  ["snooze" {:set true :about "eat"} "snooze-reminder"]
+  [nil {:set true :about "eat"} "say" cancel-ko]
+  [nil {:set true :about "eat"} "stop"]
+  ["in 2 minutes" {:set true :about "eat"} "merge"]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2} "set-reminder"]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "say" set-ok]
+  [nil {:set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "clear-context"]
+  [nil {} "stop"]
+  ["thanks" {} "say" welcome]
+  [nil {} "stop"])
+
+#_(story "greetings+cancel+snooze"
+  ["hey" {} "say" greet]
+  [nil {} "stop"]
+  ["hey there" {} "say" greet]
+  [nil {} "stop"]
+  ["cancel my reminder" {} "merge"]
+  [nil {:cancel true} "say" cancel-which]
+  [nil {:cancel true} "stop"]
+  ["snooze it" {:cancel true} "snooze-reminder"]
+  [nil {:cancel true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "say" set-ok]
+  [nil {:cancel true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "clear-context"]
+  [nil {:cancel true} "stop"]
+  ["to eat" {:cancel true} "merge"]
+  [nil {:cancel true :about "eat"} "cancel-reminder"]
+  [nil {:cancel true :about "eat"} "say" cancel-ko]
+  [nil {:cancel true :about "eat"} "done-cancel"]
+  [nil {} "stop"])
+
+#_(story "set+show+cancel+snooze"
+  ["remind me in 2 minutes" {} "merge"]
+  [nil {:set true :time "in 2'" :time-ms 2} "say" set-what]
+  [nil {:set true :time "in 2'" :time-ms 2} "stop"]
+  ["show my reminders" {:set true :time "in 2'" :time-ms 2} "show-reminders"]
+  [nil {:set true :time "in 2'" :time-ms 2} "stop"]
+  ["cancel my reminder" {:set true :time "in 2'" :time-ms 2} "merge"]
+  [nil {:set true :time "in 2'" :time-ms 2 :cancel true} "say" cancel-which]
+  [nil {:set true :time "in 2'" :time-ms 2 :cancel true} "stop"]
+  ["snooze" {:set true :time "in 2'" :time-ms 2 :cancel true} "snooze-reminder"]
+  [nil {:set true :time "in 2'" :time-ms 2 :cancel true} "say" snooze-ko]
+  [nil {:set true :time "in 2'" :time-ms 2 :cancel true} "stop"]
+  ["to eat" {:set true :time "in 2'" :time-ms 2 :cancel true} "merge"]
+  [nil {:set true :time "in 2'" :time-ms 2 :cancel true :about "eat"} "cancel-reminder"]
+  [nil {:set true :time "in 2'" :time-ms 2 :cancel true :about "eat"} "say" cancel-ko]
+  [nil {:set true :time "in 2'" :time-ms 2 :cancel true :about "eat"} "done-cancel"]
+  [nil {:set true :time "in 2'" :time-ms 2} "stop"]
+  ["to eat" {:set true :time "in 2'" :time-ms 2} "merge"]
+  [nil {:set true :time "in 2'" :time-ms 2 :about "eat"} "set-reminder"]
+  [nil {:set true :time "in 2'" :time-ms 2 :about "eat" :ok-reminder true} "say" set-ok]
+  ;; this one is failing
+  ;; [nil {:set true :time "in 2'" :time-ms 2 :about "eat" :ok-reminder true} "clear-context"]
+  [nil {} "stop"])
+
+#_(story "cancel+set+thanks"
+  ["cancel my reminder" {} "merge"]
+  [nil {:cancel true} "say" cancel-which]
+  [nil {:cancel true} "stop"]
+  ["remind me to eat in 2 minutes" {:cancel true} "merge"]
+  [nil {:cancel true :set true :about "eat" :time "in 2'" :time-ms 2} "set-reminder"]
+  [nil {:cancel true :set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "say" set-ok]
+  [nil {:cancel true :set true :about "eat" :time "in 2'" :time-ms 2 :ok-reminder true} "clear-context"]
+  [nil {:cancel true} "stop"]
+  ["thanks" {:cancel true} "say" welcome]
+  [nil {:cancel true} "stop"]
+  ["to eat" {:cancel true} "merge"]
+  [nil {:cancel true :about "eat"} "cancel-reminder"]
+  [nil {:cancel true :about "eat"} "say" cancel-ko]
+  [nil {:cancel true :about "eat"} "done-cancel"]
   [nil {} "stop"])
