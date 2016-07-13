@@ -115,15 +115,14 @@
                         (cond->> min (> 10 min) (str "0")))
          (if (> 12 hour) "am" "pm"))))
 
-(s/defn pretty-reminders :- s/Str
+(s/defn pretty-reminders :- (s/maybe s/Str)
   [thread-id :- s/Str]
-  (or (some->> (get @threads thread-id)
-               (remove :fired)
-               seq
-               (map (fn [{:keys [at about]}]
-                      (format "%s %s" about (pretty-time at))))
-               (string/join ", "))
-      "none"))
+  (some->> (get @threads thread-id)
+           (remove :fired)
+           seq
+           (map (fn [{:keys [at about]}]
+                  (format "- %s %s" about (pretty-time at))))
+           (string/join "\n")))
 
 (s/defn solve-datetime :- (s/maybe s/Int)
   "Considers the first datetime entity found.
@@ -139,57 +138,63 @@
          (drop-while (partial > now))
          first)))
 
+(s/defn snoozable? :- s/Bool
+  "True if reminder has fired off no longer than `snooze-allowed-ms` ago."
+  [{:keys [at]} :- Reminder]
+  (<= (-> (t/now) c/to-long (- snooze-allowed-ms)) at))
+
 ;; -----------------------------------------------------------------------------
 ;; Wit actions
+
+(defn cancel-reminder!>
+  [params thread-id {:keys [about] :as context}]
+  (go (let [n (remove-reminder! thread-id about)]
+        (cond-> context
+          n (assoc :ok-cancel true :reminders-left n)))))
+
+(defn done-cancel!>
+  [params thread-id context]
+  (go (dissoc context :about :cancel :ok-cancel :reminders-left)))
+
+(defn done-set!>
+  [params thread-id context]
+  (go (dissoc context :about :time :time-ms :ok-reminder :set)))
+
+(defn merge!>
+  [params thread-id context entities msg]
+  (go (let [time-ms (some-> entities :datetime solve-datetime)
+            about (some-> (get-in entities [:reminder 0 :value])
+                          (string/replace #"(^my|(?<=\s)my)(\s|$)" "your$2"))
+            intent (get-in entities [:intent 0 :value])]
+        (cond-> context
+          (= "cancel_reminder" intent) (assoc :cancel true)
+          (= "set_reminder" intent) (assoc :set true)
+          (= "snooze_reminder" intent) (assoc :snooze true)
+          about (assoc :about about)
+          time-ms (assoc :time-ms time-ms
+                         :time (pretty-time time-ms))))))
 
 (defn say!>
   [{:keys [fb-page-token]} thread-id context msg]
   (go (infof "Sending message user=%s msg=%s" thread-id msg)
       (<! (req/fb-message!> fb-page-token thread-id msg))))
 
-(defn merge!>
-  [params thread-id context entities msg]
-  (go (let [time-ms (some-> entities :datetime solve-datetime)
-            about (get-in entities [:reminder 0 :value])
-            intent (get-in entities [:intent 0 :value])]
-        (cond-> context
-          (= "cancel_reminder" intent) (assoc :cancel true)
-          (= "set_reminder" intent) (assoc :set true)
-          (= "show_reminders" intent) (assoc :reminders (pretty-reminders thread-id))
-          (= "snooze_reminder" intent) (assoc :snooze true)
-          about (assoc :about about)
-          time-ms (assoc :time-ms time-ms
-                         :time (pretty-time time-ms))))))
-
-(defn error!>
-  [{:keys [fb-page-token]} thread-id context msg]
-  (go (warnf "Sending error user=%s msg=%s" thread-id msg)
-      (<! (req/fb-message!> fb-page-token thread-id msg))))
-
-(defn cancel-reminder!>
-  [params thread-id {:keys [about] :as context}]
-  (go (let [n (remove-reminder! thread-id about)]
-        (cond-> context
-          n (assoc :ok-cancel true :reminders n)))))
-
-(defn clear-context!>
-  [params thread-id context]
-  (go {}))
-
 (defn set-reminder!>
   [{:keys [fb-page-token]} thread-id {:keys [about time-ms] :as context}]
   {:pre [(and about time-ms)]}
   (go (let [success? (->> {:about about
                            :at time-ms
-                           :message (format "Here's your reminder to %s!" about)}
+                           :message (format "Here's your reminder: %s!" about)}
                           (schedule-reminder! fb-page-token thread-id))]
         (cond-> context
           success? (assoc :ok-reminder true)))))
 
-(s/defn snoozable? :- s/Bool
-  "True if reminder has fired off no longer than `snooze-allowed-ms` ago."
-  [{:keys [at]} :- Reminder]
-  (<= (-> (t/now) c/to-long (- snooze-allowed-ms)) at))
+(defn show-reminders!>
+  [params thread-id context]
+  (go (let [msg (or (some->> (pretty-reminders thread-id)
+                             (str "Here are your scheduled reminders:\n"))
+                    "You don't have any reminders scheduled.")]
+        (<! (say!> params thread-id context msg)))))
 
 (defn snooze-reminder!>
   [{:keys [fb-page-token] :as params} thread-id context]

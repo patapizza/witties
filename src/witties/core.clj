@@ -96,13 +96,7 @@
                                   _ (infof "%s - Executing %s with thread-id=%s context=%s"
                                            bot action thread-id (pr-str context))
                                   context' (<! ((->bot-fn bot action) params thread-id context))]
-                              (<! (step!> nil context' (dec steps))))
-
-                            (= "error" type)
-                            (do (infof "%s - Executing error!> with thread-id=%s context=%s"
-                                       bot thread-id (pr-str context))
-                                (<! ((->bot-fn bot "error") params thread-id context "Oops, I don't know what to do."))
-                                (<! (step!> nil context (dec steps)))))))))]
+                              (<! (step!> nil context' (dec steps)))))))))]
      (step!> user-msg context max-steps))))
 
 (defn get-or-create-session!
