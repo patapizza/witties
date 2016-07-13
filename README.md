@@ -1,6 +1,11 @@
 # witties
 
-Wit.ai-based bots
+[Wit.ai](https://wit.ai) powered bots.
+
+
+## Bots
+
+* [Woodpecker](https://m.me/woodpeckerbot), your reminder bot. Wit instance: https://wit.ai/patapizza/woodpecker
 
 ## License
 
