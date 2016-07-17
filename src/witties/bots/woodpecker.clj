@@ -179,13 +179,9 @@
 (defn say!>
   [{:keys [fb-page-token]} thread-id context msg quickreplies]
   (go (let [quickreplies (when (= "which-cancel" (first quickreplies))
-                           (some->> (pending-reminders thread-id)
-                                    (map (fn [{:keys [about]}]
-                                           {:content_type "text"
-                                            :title about
-                                            :payload about}))))]
+                           (->> (pending-reminders thread-id) (map :about)))]
         (infof "Sending message user=%s msg=%s quickreplies=%s"
-               thread-id msg (mapv :title quickreplies))
+               thread-id msg (pr-str quickreplies))
         (<! (req/fb-message!> fb-page-token thread-id msg quickreplies)))))
 
 (defn set-reminder!>

@@ -35,6 +35,7 @@
     :recipient s/Str
     (s/optional-key :attachments) [Attachment]
     (s/optional-key :postback) s/Str
+    (s/optional-key :quick-reply) s/Str
     (s/optional-key :sticker) s/Num
     (s/optional-key :text) s/Str}
    (some-fn :attachments :postback :sticker :text)))
@@ -168,7 +169,7 @@
       (if (= c ctrl)
         (<! (stop!> db-url))
         (let [err (event-checker v)
-              {:keys [recipient sender text]} v
+              {:keys [quick-reply recipient sender text]} v
               [bot params] (bot-for-page recipient)]
           (cond
             err (warnf "malformed event %s err=%s" v (pr-str err))
@@ -177,7 +178,8 @@
                          (infof "Got no text for bot=%s from thread-id=%s. Executing say!> with msg=%s"
                                 bot sender msg)
                          (<! ((->bot-fn bot "say!>") (dissoc params :threads) sender {} msg nil)))
-            :else (let [{:keys [session-id context]} (get-or-create-session! bot sender)]
+            :else (let [{:keys [session-id context]} (get-or-create-session! bot sender)
+                        text (or quick-reply text)]
                     (debugf "Running actions for bot=%s thread-id=%s session-id=%s text=%s context=%s"
                             bot sender session-id text (pr-str context))
                     (some->> (run-actions!> bot (dissoc params :threads) sender session-id text context)

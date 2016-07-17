@@ -52,6 +52,7 @@
 ;; Messenger
 
 (def fb-url "https://graph.facebook.com/v2.6/me/messages")
+(def quick-reply-max-len 20)
 
 (defn fb!>
   [access-token meth opts]
@@ -63,12 +64,24 @@
                 meth fb-url (pr-str opts) (pr-str resp))
         resp)))
 
+(defn maybe-truncate
+  [text max-len]
+  (cond-> text
+    (< max-len (count text))
+    (->> (take (- max-len 3))
+         (apply str)
+         (format "%s..."))))
+
 (defn fb-message!>
   ([access-token recipient message]
    (fb-message!> access-token recipient message nil))
   ([access-token recipient message quickreplies]
-   (let [payload {:recipient {:id recipient}
+   (let [mk-quickreply (fn [text]
+                         {:content_type "text"
+                          :title (maybe-truncate text quick-reply-max-len)
+                          :payload text})
+         payload {:recipient {:id recipient}
                   :message (cond-> {:text message}
-                             quickreplies (assoc :quick_replies quickreplies))}
+                             (seq quickreplies) (assoc :quick_replies (map mk-quickreply quickreplies)))}
          opts {:body (j/encode payload)}]
      (fb!> access-token http/post opts))))

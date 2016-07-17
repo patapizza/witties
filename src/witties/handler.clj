@@ -60,7 +60,7 @@
 
 (s/defn messaging-entry->event :- (s/maybe core/Event)
   [{:keys [recipient sender timestamp]
-    {:keys [attachments sticker_id text]} :message
+    {:keys [attachments quick_reply sticker_id text]} :message
     {:keys [payload]} :postback}]
   (when (or attachments payload sticker_id text)
     (cond-> {:recipient (:id recipient)
@@ -68,6 +68,7 @@
              :timestamp timestamp}
       attachments (assoc :attachments attachments)
       payload (assoc :postback payload)
+      quick_reply (assoc :quick-reply (:payload quick_reply))
       sticker_id (assoc :sticker sticker_id)
       text (assoc :text text))))
 
