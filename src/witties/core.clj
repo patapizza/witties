@@ -5,7 +5,7 @@
             [clojure.string :as string]
             [clj-time.coerce :as c]
             [clj-time.core :as t]
-            [plumbing.core :refer [map-from-keys]]
+            [plumbing.core :refer [map-from-keys map-vals]]
             [schema.core :as s]
             [taoensso.timbre :refer [debugf infof warnf]]
             [witties.bots.quickstart]
@@ -21,9 +21,9 @@
           :fb-page-token \"\"
           :fb-page-id \"42\"
           :fb-app-secret \"abc\"
-          :threads {\"42\" [{:session-id \"\"
-                             :started-at 241423535
-                             :context {}}]}}}"
+          :threads {\"42\" {:session-id \"\"
+                            :started-at 241423535
+                            :context {}}}}}"
   (atom nil))
 
 (def Attachment
@@ -43,6 +43,7 @@
 
 (def graceful-stop-ms 25000) ;; 25 seconds (30 seconds max on Heroku)
 (def max-steps 10)
+(def session-expire-ms (* 1000 60 3)) ;; 3 minutes
 
 ;; TODO: use fb-page-id as bot-id
 (defn bot-for-page
@@ -100,13 +101,16 @@
      (step!> user-msg context max-steps))))
 
 (defn get-or-create-session!
+  "Sessions expire after `session-expire-ms`."
   [bot thread-id]
-  (if-let [session (get-in @bots [bot :threads thread-id 0])]
-    session
-    (let [new-session {:session-id (str (UUID/randomUUID))
-                       :started-at (-> (t/now) c/to-long)}]
-      (swap! bots update-in [bot :threads thread-id] (fnil conj []) new-session)
-      new-session)))
+  (let [now-ms (-> (t/now) c/to-long)
+        existing (get-in @bots [bot :threads thread-id])]
+    (if (and existing (< (- now-ms session-expire-ms) (:started-at existing)))
+      existing
+      (let [new-session {:session-id (str (UUID/randomUUID))
+                         :started-at now-ms}]
+        (swap! bots assoc-in [bot :threads thread-id] new-session)
+        new-session))))
 
 (defn stop-bots!>
   "Gives each bot allowed-ms time to gracefully stop."
@@ -130,10 +134,9 @@
         (db/exec! db-url "truncate table sessions")
         (->> @bots
              (mapcat (fn [[bot {:keys [threads]}]]
-                       (mapcat (fn [[thread-id sessions]]
-                                 (map #(assoc % :bot bot :thread-id thread-id)
-                                      sessions))
-                               threads)))
+                       (map (fn [[thread-id session]]
+                              (assoc session :bot bot :thread-id thread-id))
+                            threads)))
              (db/insert-rows! db-url :sessions)))
       (<! (stop-bots!> (keys @bots)))))
 
@@ -149,8 +152,10 @@
            (pmap (fn [{:keys [bot] :as bot-config}]
                    (when-let [f (->bot-fn bot "init!")]
                      (f (assoc bot-config :db-url db-url)))
-                   (let [threads (->> (db/q db-url ["select * from sessions where bot = ?" bot])
-                                      (group-by :thread-id))]
+                   (let [threads (->> ["select * from sessions where bot = ? order by started_at desc" bot]
+                                      (db/q db-url)
+                                      (group-by :thread-id)
+                                      (map-vals first))]
                      [(keyword bot) (cond-> (dissoc bot-config :bot)
                                       (seq threads) (assoc :threads threads))])))
            (into {})
@@ -171,11 +176,11 @@
             (not text) (let [msg "Oops I can only deal with text right now."]
                          (infof "Got no text for bot=%s from thread-id=%s. Executing say!> with msg=%s"
                                 bot sender msg)
-                         (<! ((->bot-fn bot "say!>") (dissoc params :threads) sender {} msg)))
+                         (<! ((->bot-fn bot "say!>") (dissoc params :threads) sender {} msg nil)))
             :else (let [{:keys [session-id context]} (get-or-create-session! bot sender)]
                     (debugf "Running actions for bot=%s thread-id=%s session-id=%s text=%s context=%s"
                             bot sender session-id text (pr-str context))
                     (some->> (run-actions!> bot (dissoc params :threads) sender session-id text context)
                              <!
-                             (swap! bots assoc-in [bot :threads sender 0 :context]))))
+                             (swap! bots assoc-in [bot :threads sender :context]))))
           (recur))))))

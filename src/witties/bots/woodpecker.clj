@@ -117,9 +117,7 @@
 
 (s/defn pending-reminders :- (s/maybe [Reminder])
   [thread-id :- s/Str]
-  (->> (get @threads thread-id [])
-       (remove :fired)
-       seq))
+  (->> (get @threads thread-id) (remove :fired) seq))
 
 (s/defn pretty-reminders :- (s/maybe s/Str)
   [thread-id :- s/Str]
@@ -227,6 +225,7 @@
 (defn init!
   "Restarts saved reminders, if any."
   [{:keys [db-url fb-page-token]}]
+  (reset! threads nil)
   (when db-url
     (reset! db-ref db-url)
     (doseq [{:keys [thread-id] :as r} (db/q db-url "select * from woodpecker")]
