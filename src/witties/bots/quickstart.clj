@@ -2,7 +2,7 @@
   (require [clojure.core.async :refer [go]]))
 
 (defn say!>
-  [params thread-id context msg]
+  [params thread-id context msg quickreplies]
   (go (println (format "Bot says: %s" msg))))
 
 (defn merge!>
@@ -10,10 +10,6 @@
   (go (let [loc (get-in entities [:location 0 :value])]
         (cond-> context
           loc (assoc :loc (cond-> loc (map? loc) (:value loc)))))))
-
-(defn error!>
-  [params thread-id context msg]
-  (go (println (format "Bot error: %s" msg))))
 
 (defn fetch-weather!>
   [params thread-id context]

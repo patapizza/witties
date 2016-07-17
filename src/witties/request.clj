@@ -10,8 +10,8 @@
             resp (try (j/decode body true)
                       (catch Exception e
                         (warnf e "couldn't parse JSON response body=%s" body)))]
-        (if-let [err (or error (and (not= 200 status) status))]
-          (do (warnf "received status=%s error=%s" status error)
+        (if-let [err (or error (and (not= 200 status) body))]
+          (do (warnf "received status=%s error=%s" status err)
               {:error err})
           resp))))
 
@@ -64,8 +64,11 @@
         resp)))
 
 (defn fb-message!>
-  [access-token recipient message]
-  (let [payload {:recipient {:id recipient}
-                 :message {:text message}}
-        opts {:body (j/encode payload)}]
-    (fb!> access-token http/post opts)))
+  ([access-token recipient message]
+   (fb-message!> access-token recipient message nil))
+  ([access-token recipient message quickreplies]
+   (let [payload {:recipient {:id recipient}
+                  :message (cond-> {:text message}
+                             quickreplies (assoc :quick_replies quickreplies))}
+         opts {:body (j/encode payload)}]
+     (fb!> access-token http/post opts))))

@@ -115,11 +115,15 @@
                         (cond->> min (> 10 min) (str "0")))
          (if (> 12 hour) "am" "pm"))))
 
+(s/defn pending-reminders :- (s/maybe [Reminder])
+  [thread-id :- s/Str]
+  (->> (get @threads thread-id [])
+       (remove :fired)
+       seq))
+
 (s/defn pretty-reminders :- (s/maybe s/Str)
   [thread-id :- s/Str]
-  (some->> (get @threads thread-id)
-           (remove :fired)
-           seq
+  (some->> (pending-reminders thread-id)
            (map (fn [{:keys [at about]}]
                   (format "- %s %s" about (pretty-time at))))
            (string/join "\n")))
@@ -175,9 +179,16 @@
                          :time (pretty-time time-ms))))))
 
 (defn say!>
-  [{:keys [fb-page-token]} thread-id context msg]
-  (go (infof "Sending message user=%s msg=%s" thread-id msg)
-      (<! (req/fb-message!> fb-page-token thread-id msg))))
+  [{:keys [fb-page-token]} thread-id context msg quickreplies]
+  (go (let [quickreplies (when (= "which-cancel" (first quickreplies))
+                           (some->> (pending-reminders thread-id)
+                                    (map (fn [{:keys [about]}]
+                                           {:content_type "text"
+                                            :title about
+                                            :payload about}))))]
+        (infof "Sending message user=%s msg=%s quickreplies=%s"
+               thread-id msg (mapv :title quickreplies))
+        (<! (req/fb-message!> fb-page-token thread-id msg quickreplies)))))
 
 (defn set-reminder!>
   [{:keys [fb-page-token]} thread-id {:keys [about time-ms] :as context}]
@@ -194,7 +205,7 @@
   (go (let [msg (or (some->> (pretty-reminders thread-id)
                              (str "Here are your scheduled reminders:\n"))
                     "You don't have any reminders scheduled.")]
-        (<! (say!> params thread-id context msg)))))
+        (<! (say!> params thread-id context msg nil)))))
 
 (defn snooze-reminder!>
   [{:keys [fb-page-token] :as params} thread-id context]

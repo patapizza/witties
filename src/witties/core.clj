@@ -69,7 +69,7 @@
                   (go (if (>= 0 steps)
                         (do (warnf "%s - Max steps reached" bot)
                             context)
-                        (let [{:keys [action entities error msg type]}
+                        (let [{:keys [action entities error msg quickreplies type]}
                               (<! (req/converse!> wit-token session-id msg context))]
                           (cond
                             error
@@ -82,7 +82,7 @@
                             (= "msg" type)
                             (do (infof "%s - Executing say!> with thread-id=%s context=%s msg=%s"
                                        bot session-id (pr-str context) msg)
-                                (<! ((->bot-fn bot "say!>") params thread-id context msg))
+                                (<! ((->bot-fn bot "say!>") params thread-id context msg quickreplies))
                                 (<! (step!> nil context (dec steps))))
 
                             (= "merge" type)
