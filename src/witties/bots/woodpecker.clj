@@ -148,19 +148,16 @@
 ;; -----------------------------------------------------------------------------
 ;; Wit actions
 
+(declare say!>)
 (defn cancel-reminder!>
   [params thread-id {:keys [about] :as context}]
-  (go (let [n (remove-reminder! thread-id about)]
-        (cond-> context
-          n (assoc :ok-cancel true :reminders-left n)))))
-
-(defn done-cancel!>
-  [params thread-id context]
-  (go (dissoc context :about :cancel :ok-cancel :reminders-left)))
-
-(defn done-set!>
-  [params thread-id context]
-  (go (dissoc context :about :time :time-ms :ok-reminder :set)))
+  (go
+    (let [msg (if-let [n (remove-reminder! thread-id about)]
+                (format "Okay, I won't remind you \"%s\". You have %s reminders left."
+                        about n)
+                (format "Oops, I didn't find any reminders matching \"%s\"." about))]
+      (<! (say!> params thread-id context msg nil))
+      (dissoc context :cancel :about))))
 
 (defn merge!>
   [params thread-id context entities msg]
@@ -171,10 +168,8 @@
         (cond-> context
           (= "cancel_reminder" intent) (assoc :cancel true)
           (= "set_reminder" intent) (assoc :set true)
-          (= "snooze_reminder" intent) (assoc :snooze true)
           about (assoc :about about)
-          time-ms (assoc :time-ms time-ms
-                         :time (pretty-time time-ms))))))
+          time-ms (assoc :time-ms time-ms)))))
 
 (defn say!>
   [{:keys [fb-page-token]} thread-id context msg quickreplies]
@@ -185,35 +180,39 @@
         (<! (req/fb-message!> fb-page-token thread-id msg quickreplies)))))
 
 (defn set-reminder!>
-  [{:keys [fb-page-token]} thread-id {:keys [about time-ms] :as context}]
+  [{:keys [fb-page-token] :as params} thread-id {:keys [about time-ms] :as context}]
   {:pre [(and about time-ms)]}
   (go (let [success? (->> {:about about
                            :at time-ms
                            :message (format "Here's your reminder: %s!" about)}
-                          (schedule-reminder! fb-page-token thread-id))]
-        (cond-> context
-          success? (assoc :ok-reminder true)))))
+                          (schedule-reminder! fb-page-token thread-id))
+            msg (if success?
+                  (format "OK I'll remind you \"%s\" %s."
+                          about (pretty-time time-ms))
+                  "Oops, something went wrong.")]
+        (<! (say!> params thread-id context msg nil))
+        (dissoc context :about :set :time-ms))))
 
 (defn show-reminders!>
   [params thread-id context]
   (go (let [msg (or (some->> (pretty-reminders thread-id)
                              (str "Here are your scheduled reminders:\n"))
                     "You don't have any reminders scheduled.")]
-        (<! (say!> params thread-id context msg nil)))))
+        (<! (say!> params thread-id context msg nil))
+        context)))
 
 (defn snooze-reminder!>
   [{:keys [fb-page-token] :as params} thread-id context]
-  (go (if-let [{:keys [about at]} (some->> (get @threads thread-id)
-                                           (filter (every-pred :fired snoozable?))
-                                           last
-                                           (<- (assoc :at (-> (t/now) c/to-long (+ snooze-ms))))
-                                           (reschedule-reminder! fb-page-token thread-id))]
-        (cond-> context
-          about (assoc :ok-reminder true
-                       :about about
-                       :time (pretty-time at)
-                       :time-ms at))
-        context)))
+  (go (when-let [{:keys [about at]} (some->> (get @threads thread-id)
+                                             (filter (every-pred :fired snoozable?))
+                                             last
+                                             (<- (assoc :at (-> (t/now) c/to-long (+ snooze-ms))))
+                                             (reschedule-reminder! fb-page-token thread-id))]
+        (let [msg (if about
+                    (format "OK I'll remind you \"%s\" %s." about (pretty-time at))
+                    "Oops, I didn't find any reminders to snooze.")]
+          (<! (say!> params thread-id context msg nil))))
+      context))
 
 ;; -----------------------------------------------------------------------------
 ;; Core interface
