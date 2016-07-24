@@ -23,6 +23,7 @@
           :fb-app-secret \"abc\"
           :threads {\"42\" {:session-id \"\"
                             :started-at 241423535
+                            :updated-at 241423535
                             :context {}}}}}"
   (atom nil))
 
@@ -102,14 +103,17 @@
      (step!> user-msg context max-steps))))
 
 (defn get-or-create-session!
-  "Sessions expire after `session-expire-ms`."
+  "Sessions expire `session-expire-ms` after last message."
   [bot thread-id]
   (let [now-ms (-> (t/now) c/to-long)
         existing (get-in @bots [bot :threads thread-id])]
-    (if (and existing (< (- now-ms session-expire-ms) (:started-at existing)))
-      existing
+    (if (and existing (< (- now-ms session-expire-ms) (:updated-at existing)))
+      (do
+        (swap! bots assoc-in [bot :threads thread-id :updated-at] now-ms)
+        existing)
       (let [new-session {:session-id (str (UUID/randomUUID))
-                         :started-at now-ms}]
+                         :started-at now-ms
+                         :updated-at now-ms}]
         (swap! bots assoc-in [bot :threads thread-id] new-session)
         new-session))))
 
