@@ -53,6 +53,7 @@
 
 (def fb-url "https://graph.facebook.com/v2.6/me/messages")
 (def quick-reply-max-len 20)
+(def text-max-len 320)
 
 (defn fb!>
   [access-token meth opts]
@@ -81,7 +82,7 @@
                           :title (maybe-truncate text quick-reply-max-len)
                           :payload text})
          payload {:recipient {:id recipient}
-                  :message (cond-> {:text message}
+                  :message (cond-> {:text (maybe-truncate message text-max-len)}
                              (seq quickreplies) (assoc :quick_replies (map mk-quickreply quickreplies)))}
          opts {:body (j/encode payload)}]
      (fb!> access-token http/post opts))))
