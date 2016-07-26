@@ -203,16 +203,16 @@
 
 (defn snooze-reminder!>
   [{:keys [fb-page-token] :as params} thread-id context]
-  (go (when-let [{:keys [about at]} (some->> (get @threads thread-id)
-                                             (filter (every-pred :fired snoozable?))
-                                             last
-                                             (<- (assoc :at (-> (t/now) c/to-long (+ snooze-ms))))
-                                             (reschedule-reminder! fb-page-token thread-id))]
-        (let [msg (if about
-                    (format "OK I'll remind you \"%s\" %s." about (pretty-time at))
-                    "Oops, I didn't find any reminders to snooze.")]
-          (<! (say!> params thread-id context msg nil))))
-      context))
+  (go (let [{:keys [about at]} (some->> (get @threads thread-id)
+                                        (filter (every-pred :fired snoozable?))
+                                        last
+                                        (<- (assoc :at (-> (t/now) c/to-long (+ snooze-ms))))
+                                        (reschedule-reminder! fb-page-token thread-id))
+            msg (if about
+                  (format "OK I'll remind you \"%s\" %s." about (pretty-time at))
+                  "Oops, I didn't find any reminders to snooze.")]
+        (<! (say!> params thread-id context msg nil))
+        context)))
 
 ;; -----------------------------------------------------------------------------
 ;; Core interface
